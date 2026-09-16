@@ -1,0 +1,36 @@
+# ── OS ──
+.DS_Store
+**/.DS_Store
+Thumbs.db
+
+# ── Dependencies ──
+node_modules/
+**/node_modules/
+
+# ── Build output ──
+dist/
+build/
+**/dist/
+**/build/
+
+# ── Env & secrets ──
+.env
+.env.*
+!.env.example
+**/.env
+!**/.env.example
+
+# ── Logs ──
+logs/
+**/logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── Editor / misc ──
+.vscode/
+.idea/
+*.swp
+coverage/
+.cache/

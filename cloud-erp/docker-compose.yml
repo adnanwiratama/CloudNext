@@ -1,0 +1,71 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: cloud-erp-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cloud_erp
+      POSTGRES_USER: erp_user
+      POSTGRES_PASSWORD: erp_secure_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U erp_user -d cloud_erp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: cloud-erp-redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cloud-erp-backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      APP_PORT: 4000
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: cloud_erp
+      DB_USER: erp_user
+      DB_PASSWORD: erp_secure_password
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET:-cloud-erp-super-secret-jwt-key-change-in-production-2026}
+      JWT_EXPIRES_IN: 8h
+      CORS_ORIGINS: http://localhost:8080
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - uploads:/app/uploads
+      - logs:/app/logs
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cloud-erp-frontend
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  uploads:
+  logs:
