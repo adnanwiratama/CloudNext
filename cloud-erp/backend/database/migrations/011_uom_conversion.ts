@@ -2,15 +2,17 @@ import { Knex } from 'knex';
 
 export async function up(knex: Knex): Promise<void> {
   // ── UOM Types (conversion groups, e.g. Weight, Length) ────────────────────
-  await knex.schema.createTableIfNotExists('uom_types', t => {
-    t.uuid('id').primary().defaultTo(knex.raw('gen_random_uuid()'));
-    t.uuid('company_id').notNullable().references('id').inTable('companies');
-    t.string('name', 100).notNullable();       // Type Name (e.g. Weight)
-    t.text('description').nullable();
-    t.boolean('is_active').defaultTo(true);
-    t.timestamp('created_at').defaultTo(knex.fn.now());
-    t.timestamp('updated_at').defaultTo(knex.fn.now());
-  });
+  if (!(await knex.schema.hasTable('uom_types'))) {
+    await knex.schema.createTable('uom_types', t => {
+      t.uuid('id').primary().defaultTo(knex.raw('gen_random_uuid()'));
+      t.uuid('company_id').notNullable().references('id').inTable('companies');
+      t.string('name', 100).notNullable();       // Type Name (e.g. Weight)
+      t.text('description').nullable();
+      t.boolean('is_active').defaultTo(true);
+      t.timestamp('created_at').defaultTo(knex.fn.now());
+      t.timestamp('updated_at').defaultTo(knex.fn.now());
+    });
+  }
 
   // ── Extend units_of_measure with conversion metadata ──────────────────────
   const cols: Array<[string, (t: Knex.AlterTableBuilder) => void]> = [
