@@ -182,29 +182,31 @@ function ApprovalQueuePortlet({ data }: { data: any }) {
   }
 
   return (
-    <table className="erp-table">
-      <thead>
-        <tr>
-          <th>Type</th><th className="whitespace-nowrap">Number</th><th>Description</th>
-          <th className="text-right">Amount</th><th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {items.map((item, i) => (
-          <tr key={i} className="cursor-pointer" onClick={() => navigate(item.path)}>
-            <td><span className={`badge ${item.color}`}>{item.type}</span></td>
-            <td className="font-mono text-sm text-blue-600 font-medium whitespace-nowrap">{item.number}</td>
-            <td className="text-slate-600 max-w-xs truncate">{item.desc}</td>
-            <td className="text-right font-medium">{formatCurrency(item.amount)}</td>
-            <td>
-              <button className="text-sm text-blue-600 hover:underline whitespace-nowrap">
-                Approve
-              </button>
-            </td>
+    <div className="overflow-x-auto">
+      <table className="erp-table">
+        <thead>
+          <tr>
+            <th>Type</th><th className="whitespace-nowrap">Number</th><th>Description</th>
+            <th className="text-right whitespace-nowrap">Amount</th><th className="text-right"></th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {items.map((item, i) => (
+            <tr key={i} className="cursor-pointer" onClick={() => navigate(item.path)}>
+              <td><span className={`badge ${item.color}`}>{item.type}</span></td>
+              <td className="font-mono text-sm text-blue-600 font-medium whitespace-nowrap">{item.number}</td>
+              <td className="text-slate-600 max-w-xs truncate">{item.desc}</td>
+              <td className="text-right font-medium whitespace-nowrap">{formatCurrency(item.amount)}</td>
+              <td className="text-right">
+                <button className="text-sm text-blue-600 hover:underline whitespace-nowrap">
+                  Approve
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -370,7 +372,9 @@ export default function Dashboard() {
   // Column span per widget in the 3-column grid.
   const SPAN: Record<string, string> = {
     reminders: 'col-span-1', kpis: 'col-span-2', revenue: 'col-span-2', topCustomers: 'col-span-1',
-    approvals: 'col-span-1', lowStock: 'col-span-1', recentGL: 'col-span-3',
+    // Pending Approvals needs room for Type/Number/Description/Amount + the Approve
+    // action, so it spans 2 of 3 columns (Low Stock sits beside it to fill the row).
+    approvals: 'col-span-2', lowStock: 'col-span-1', recentGL: 'col-span-3',
   };
 
   return (
