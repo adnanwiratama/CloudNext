@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Loader2, Plus, X, ChevronUp, ChevronDown, GripVertical } from 'lucide-react';
+import { Loader2, Plus, X, ChevronUp, ChevronDown, GripVertical, Play } from 'lucide-react';
 import api from '../../services/api';
 import ReportExportBar from '../../components/common/ReportExportBar';
 import { ReportModel } from '../../utils/reportExport';
@@ -133,6 +133,21 @@ export default function CustomReportBuilder() {
     } finally { setRunning(false); }
   };
 
+  // Run the SAVED definition (server-side), used by the Run button on a loaded report.
+  const runSaved = async () => {
+    if (!loadedId) return run();
+    setRunning(true);
+    try {
+      const r = await api.post(`/api/reports/custom/${loadedId}/run`, {});
+      setRunCols(r.data.data.columns || []);
+      setRunRows(r.data.data.rows || []);
+      setShowResults(true);
+      if ((r.data.data.rows || []).length === 0) toast('No rows matched', { icon: 'ℹ️' });
+    } catch (e: any) {
+      toast.error(e.response?.data?.error || 'Failed to run report');
+    } finally { setRunning(false); }
+  };
+
   const save = async () => {
     if (!name.trim()) { toast.error('Enter a Search Title'); return; }
     if (!recordType) { toast.error('Pick a record type'); return; }
@@ -193,6 +208,11 @@ export default function CustomReportBuilder() {
               </button>
             )}
             <button onClick={() => navigate('/analytics/custom-reports')} className="px-4 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Cancel</button>
+            {loadedId && (
+              <button onClick={runSaved} disabled={running} className="flex items-center gap-1.5 px-4 py-1.5 bg-emerald-600 text-white text-sm font-medium rounded hover:bg-emerald-700 disabled:opacity-60">
+                {running ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />} Run
+              </button>
+            )}
             <button onClick={run} disabled={running || !recordType} className="px-4 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50 disabled:opacity-60 flex items-center gap-1.5">
               {running && <Loader2 size={13} className="animate-spin" />} Preview
             </button>

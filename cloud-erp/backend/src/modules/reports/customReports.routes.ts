@@ -32,7 +32,26 @@ interface CatalogColumn {
   source: 'header' | 'line';
   label: string;
   type: FieldType;
+  // When set, this column is a foreign key resolved to a human name via a join.
+  resolve?: { table: string; nameCol: string };
 }
+
+// Foreign-key → master lookup. An "*_id" column listed here is shown as a resolved
+// NAME (joined) instead of a raw UUID. table = master table, nameCol = display col.
+const FK_RESOLVERS: Record<string, { table: string; nameCol: string; label: string }> = {
+  customer_id:     { table: 'customers',   nameCol: 'name', label: 'Customer' },
+  vendor_id:       { table: 'vendors',     nameCol: 'name', label: 'Vendor' },
+  item_id:         { table: 'items',       nameCol: 'name', label: 'Item' },
+  location_id:     { table: 'locations',   nameCol: 'name', label: 'Location' },
+  department_id:   { table: 'departments', nameCol: 'name', label: 'Department' },
+  subsidiary_id:   { table: 'subsidiaries',nameCol: 'name', label: 'Subsidiary' },
+  uom_id:          { table: 'units_of_measure', nameCol: 'name', label: 'Unit' },
+  account_id:      { table: 'accounts',    nameCol: 'name', label: 'Account' },
+  sales_rep_id:    { table: 'users',       nameCol: 'name', label: 'Sales Rep' },
+  created_by:      { table: 'users',       nameCol: 'name', label: 'Created By' },
+  approved_by:     { table: 'users',       nameCol: 'name', label: 'Approved By' },
+  warehouse_id:    { table: 'warehouses',  nameCol: 'name', label: 'Warehouse' },
+};
 
 // Humanize a raw column name → "order_number" → "Order Number".
 function humanize(col: string): string {
@@ -71,22 +90,34 @@ async function buildCatalog(type: string): Promise<{ def: any; columns: CatalogC
 
   const columns: CatalogColumn[] = [];
 
-  const headerCols = await tableColumns(def.table);
-  for (const c of headerCols) {
-    columns.push({
-      key: `h.${c.column}`, column: c.column, source: 'header',
-      label: labelByKey[c.column] || humanize(c.column), type: c.type,
-    });
-  }
+  // Technical columns that add no reporting value — hidden from the catalog.
+  const HIDDEN = new Set(['company_id', 'is_deleted', 'updated_by']);
 
-  if (def.lineTable) {
-    const lineCols = await tableColumns(def.lineTable);
-    for (const c of lineCols) {
+  const emit = (c: { column: string; type: FieldType }, source: 'header' | 'line') => {
+    if (HIDDEN.has(c.column)) return;
+    const prefix = source === 'header' ? 'h' : 'l';
+    const linePfx = source === 'line' ? 'Line: ' : '';
+    const fk = FK_RESOLVERS[c.column];
+    if (fk) {
+      // Resolved FK: show the master NAME instead of the UUID.
       columns.push({
-        key: `l.${c.column}`, column: c.column, source: 'line',
-        label: `Line: ${labelByKey[c.column] || humanize(c.column)}`, type: c.type,
+        key: `${prefix}.${c.column}`, column: c.column, source,
+        label: `${linePfx}${fk.label} Name`, type: 'string',
+        resolve: { table: fk.table, nameCol: fk.nameCol },
+      });
+    } else {
+      columns.push({
+        key: `${prefix}.${c.column}`, column: c.column, source,
+        label: `${linePfx}${labelByKey[c.column] || humanize(c.column)}`, type: c.type,
       });
     }
+  };
+
+  const headerCols = await tableColumns(def.table);
+  for (const c of headerCols) emit(c, 'header');
+  if (def.lineTable) {
+    const lineCols = await tableColumns(def.lineTable);
+    for (const c of lineCols) emit(c, 'line');
   }
   return { def, columns };
 }
@@ -140,20 +171,46 @@ async function runReport(opts: {
   const q = db(`${def.table} as h`).where('h.company_id', opts.companyId);
   if (def.lineTable && def.lineFk) q.leftJoin(`${def.lineTable} as l`, `l.${def.lineFk}`, 'h.id');
 
+  // Register a LEFT JOIN for a resolved FK column (once per column) and return the
+  // SQL reference to the joined name column. Non-resolved columns return their raw
+  // h./l. reference. Alias is unique per base-column so repeats don't collide.
+  const joined = new Set<string>();
+  const sqlRefFor = (c: CatalogColumn): string => {
+    const base = c.source === 'header' ? 'h' : 'l';
+    if (!c.resolve) return `${base}.${c.column}`;
+    const jAlias = `j_${base}_${c.column}`;        // e.g. j_h_customer_id
+    if (!joined.has(jAlias)) {
+      q.leftJoin(`${c.resolve.table} as ${jAlias}`, `${jAlias}.id`, `${base}.${c.column}`);
+      joined.add(jAlias);
+    }
+    return `${jAlias}.${c.resolve.nameCol}`;
+  };
+
   // SELECT: alias each as "src__column" so header/line collisions don't clash.
+  // Resolved FK columns select the joined name but keep the same result alias.
   const selectExprs = selected.map(k => {
     const c = byKey[k];
     const alias = `${c.source === 'header' ? 'h' : 'l'}__${c.column}`;
-    return db.raw('??.?? as ??', [c.source === 'header' ? 'h' : 'l', c.column, alias]);
+    return db.raw('?? as ??', [sqlRefFor(c), alias]);
   });
   q.select(selectExprs);
 
+  // Operators that don't need a value (so an empty value is valid for them).
+  const NO_VALUE_OPS = new Set(['is_empty', 'is_not_empty']);
   // Filters — every field validated against the whitelist; values parameterized.
   for (const f of (opts.filters || [])) {
     const c = byKey[f.field];
     if (!c || !OPERATORS.has(f.op)) continue; // silently skip invalid filter rows
-    const tbl = c.source === 'header' ? 'h' : 'l';
-    const colStr = `${tbl}.${c.column}`;        // safe: tbl is h/l, column is whitelisted
+    // Skip value-requiring filters with an empty value, else e.g. "uuid = ''"
+    // throws "invalid input syntax for type uuid". An empty filter = no filter.
+    if (!NO_VALUE_OPS.has(f.op)) {
+      const empty = f.value == null || (typeof f.value === 'string' && f.value.trim() === '') ||
+        (Array.isArray(f.value) && f.value.length === 0);
+      if (empty) continue;
+    }
+    // Filter on the resolved name column for FKs, else the raw column. Safe: refs
+    // come from the whitelist / controlled join aliases.
+    const colStr = sqlRefFor(c);
     // Use whereRaw with ?? (identifier) + ? (value) placeholders — Knex escapes both,
     // so this is type-safe and injection-safe regardless of operator.
     switch (f.op) {
@@ -183,8 +240,7 @@ async function runReport(opts: {
   if (sortRows.length) {
     for (const s of sortRows) {
       const c = byKey[s.field];
-      const tbl = c.source === 'header' ? 'h' : 'l';
-      q.orderBy(`${tbl}.${c.column}`, s.desc ? 'desc' : 'asc');
+      q.orderByRaw(`?? ${s.desc ? 'desc' : 'asc'}`, [sqlRefFor(c)]);
     }
   } else {
     q.orderBy('h.created_at', 'desc');
