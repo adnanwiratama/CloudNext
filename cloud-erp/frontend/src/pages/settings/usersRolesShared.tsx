@@ -1,17 +1,14 @@
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Loader2, Pencil, Trash2, X, Check, Shield, Users } from 'lucide-react';
+import { useMutation } from '@tanstack/react-query';
+import { Loader2, X, Check, Shield } from 'lucide-react';
 import api from '../../services/api';
-import PageHeader from '../../components/common/PageHeader';
-import { formatDate } from '../../utils/format';
 import toast from 'react-hot-toast';
-import { useAuthStore } from '../../store/authStore';
 
 // ─── Permission Matrix Definition ────────────────────────────────────────────
-const PERMISSION_LEVELS = ['NONE', 'VIEW', 'CREATE', 'EDIT', 'FULL'] as const;
-type PermLevel = typeof PERMISSION_LEVELS[number];
+export const PERMISSION_LEVELS = ['NONE', 'VIEW', 'CREATE', 'EDIT', 'FULL'] as const;
+export type PermLevel = typeof PERMISSION_LEVELS[number];
 
-const PERMISSION_SECTIONS = [
+export const PERMISSION_SECTIONS = [
   {
     section: '1. Transactions',
     items: [
@@ -86,7 +83,7 @@ const PERMISSION_SECTIONS = [
   },
 ];
 
-const LEVEL_COLORS: Record<PermLevel, string> = {
+export const LEVEL_COLORS: Record<PermLevel, string> = {
   NONE:   'bg-slate-100 text-slate-400',
   VIEW:   'bg-sky-100 text-sky-700',
   CREATE: 'bg-emerald-100 text-emerald-700',
@@ -94,8 +91,18 @@ const LEVEL_COLORS: Record<PermLevel, string> = {
   FULL:   'bg-blue-600 text-white',
 };
 
+export const parsePermissions = (role: any) => {
+  if (!role?.permissions) return {};
+  try {
+    return typeof role.permissions === 'string' ? JSON.parse(role.permissions) : role.permissions;
+  } catch { return {}; }
+};
+
+export const countPerms = (role: any) =>
+  Object.values(parsePermissions(role)).filter((v: any) => v !== 'NONE').length;
+
 // ─── Role Form Modal ──────────────────────────────────────────────────────────
-function RoleModal({ onClose, onSaved, editing }: any) {
+export function RoleModal({ onClose, onSaved, editing }: any) {
   const initPerms = () => {
     const base: Record<string, PermLevel> = {};
     PERMISSION_SECTIONS.forEach(s => s.items.forEach(i => { base[i.key] = 'NONE'; }));
@@ -103,7 +110,7 @@ function RoleModal({ onClose, onSaved, editing }: any) {
       try {
         const perms = typeof editing.permissions === 'string' ? JSON.parse(editing.permissions) : editing.permissions;
         Object.assign(base, perms);
-      } catch {}
+      } catch { /* ignore */ }
     }
     return base;
   };
@@ -113,7 +120,6 @@ function RoleModal({ onClose, onSaved, editing }: any) {
   const [perms, setPerms] = useState<Record<string, PermLevel>>(initPerms);
 
   const setLevel = (key: string, level: PermLevel) => setPerms(p => ({ ...p, [key]: level }));
-
   const setAllInSection = (items: { key: string }[], level: PermLevel) => {
     setPerms(p => {
       const next = { ...p };
@@ -233,7 +239,7 @@ function RoleModal({ onClose, onSaved, editing }: any) {
 }
 
 // ─── User Form Modal ──────────────────────────────────────────────────────────
-function UserModal({ onClose, onSaved, roles, editing }: any) {
+export function UserModal({ onClose, onSaved, roles, editing }: any) {
   const [form, setForm] = useState({
     name: editing?.name || '', email: editing?.email || '',
     password: '', phone: editing?.phone || '',
@@ -300,205 +306,6 @@ function UserModal({ onClose, onSaved, roles, editing }: any) {
           </div>
         </form>
       </div>
-    </div>
-  );
-}
-
-// ─── Main Users/Roles Page ────────────────────────────────────────────────────
-export default function UsersRolesPage() {
-  const qc = useQueryClient();
-  const currentUser = useAuthStore(s => s.user);
-  const [activeTab, setActiveTab] = useState<'users' | 'roles'>('users');
-  const [userModal, setUserModal] = useState<{ open: boolean; editing: any }>({ open: false, editing: null });
-  const [roleModal, setRoleModal] = useState<{ open: boolean; editing: any }>({ open: false, editing: null });
-
-  const { data: users = [], isLoading: usersLoading } = useQuery({
-    queryKey: ['users'],
-    queryFn: () => api.get('/api/settings/users').then(r => r.data.data || []),
-  });
-  const { data: roles = [], isLoading: rolesLoading } = useQuery({
-    queryKey: ['roles'],
-    queryFn: () => api.get('/api/settings/roles').then(r => r.data.data || []),
-  });
-
-  const deleteUserMutation = useMutation({
-    mutationFn: (id: string) => api.delete(`/api/settings/users/${id}`),
-    onSuccess: () => { toast.success('User removed'); qc.invalidateQueries({ queryKey: ['users'] }); },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to remove user'),
-  });
-
-  const deleteRoleMutation = useMutation({
-    mutationFn: (id: string) => api.delete(`/api/settings/roles/${id}`),
-    onSuccess: () => { toast.success('Role deleted'); qc.invalidateQueries({ queryKey: ['roles'] }); },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to delete role'),
-  });
-
-  const handleTabAction = () => {
-    if (activeTab === 'users') setUserModal({ open: true, editing: null });
-    else setRoleModal({ open: true, editing: null });
-  };
-
-  const parsePermissions = (role: any) => {
-    if (!role.permissions) return {};
-    try {
-      return typeof role.permissions === 'string' ? JSON.parse(role.permissions) : role.permissions;
-    } catch { return {}; }
-  };
-
-  const countPerms = (role: any) => {
-    const perms = parsePermissions(role);
-    return Object.values(perms).filter((v: any) => v !== 'NONE').length;
-  };
-
-  return (
-    <div>
-      <PageHeader
-        breadcrumbs={[{ label: 'Home', path: '/' }, { label: 'Settings', path: '/settings' }, { label: 'Users / Roles' }]}
-        title="Users / Roles"
-        actions={
-          <button onClick={handleTabAction} className="btn-primary btn-sm">
-            <Plus size={13} /> {activeTab === 'users' ? 'New User' : 'New Role'}
-          </button>
-        }
-      />
-
-      {/* Tabs */}
-      <div className="flex gap-0 mb-4 border-b border-slate-200">
-        <button onClick={() => setActiveTab('users')}
-          className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${activeTab === 'users' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-          <Users size={14} /> Manage Users ({users.length})
-        </button>
-        <button onClick={() => setActiveTab('roles')}
-          className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${activeTab === 'roles' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-          <Shield size={14} /> Manage Roles ({roles.length})
-        </button>
-      </div>
-
-      {/* Users Tab */}
-      {activeTab === 'users' && (
-        <div className="erp-card">
-          {usersLoading ? (
-            <div className="flex items-center justify-center h-32"><Loader2 size={20} className="animate-spin text-blue-500" /></div>
-          ) : (
-            <table className="erp-table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Email</th>
-                  <th>Role</th>
-                  <th>Last Login</th>
-                  <th>Admin</th>
-                  <th>Status</th>
-                  <th className="w-16"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((user: any) => (
-                  <tr key={user.id}>
-                    <td>
-                      <div className="flex items-center gap-2">
-                        <div className="w-7 h-7 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-                          {user.name?.charAt(0)?.toUpperCase()}
-                        </div>
-                        <span className="font-medium">{user.name}</span>
-                        {user.id === currentUser?.id && <span className="badge badge-blue text-2xs">You</span>}
-                      </div>
-                    </td>
-                    <td className="text-slate-600 text-xs">{user.email}</td>
-                    <td>
-                      {user.role_name
-                        ? <span className="badge badge-purple text-2xs">{user.role_name}</span>
-                        : <span className="text-slate-400 text-xs">-</span>}
-                    </td>
-                    <td className="text-slate-400 text-xs">{formatDate(user.last_login_at)}</td>
-                    <td>{user.is_admin && <span className="badge badge-orange text-2xs">Admin</span>}</td>
-                    <td><span className={user.is_active ? 'badge badge-green text-2xs' : 'badge badge-gray text-2xs'}>{user.is_active ? 'Active' : 'Inactive'}</span></td>
-                    <td>
-                      <div className="flex items-center gap-1">
-                        <button onClick={() => setUserModal({ open: true, editing: user })} className="p-1 text-slate-400 hover:text-blue-600"><Pencil size={13} /></button>
-                        {user.id !== currentUser?.id && (
-                          <button onClick={() => { if (confirm(`Remove user ${user.name}?`)) deleteUserMutation.mutate(user.id); }} className="p-1 text-slate-400 hover:text-red-600"><Trash2 size={13} /></button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
-
-      {/* Roles Tab */}
-      {activeTab === 'roles' && (
-        <div className="space-y-3">
-          {rolesLoading ? (
-            <div className="flex items-center justify-center h-32"><Loader2 size={20} className="animate-spin text-blue-500" /></div>
-          ) : roles.length === 0 ? (
-            <div className="erp-card flex flex-col items-center py-16 text-slate-400">
-              <Shield size={32} className="mb-3 opacity-30" />
-              <p className="text-sm">No roles defined yet.</p>
-              <button onClick={() => setRoleModal({ open: true, editing: null })} className="btn-primary btn-sm mt-3"><Plus size={13} /> Create First Role</button>
-            </div>
-          ) : (
-            <div className="erp-card">
-              <table className="erp-table">
-                <thead>
-                  <tr>
-                    <th>Role Name</th>
-                    <th>Description</th>
-                    <th>Active Permissions</th>
-                    <th>System</th>
-                    <th className="w-20"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {roles.map((role: any) => (
-                    <tr key={role.id}>
-                      <td>
-                        <div className="flex items-center gap-2">
-                          <Shield size={14} className="text-blue-500" />
-                          <span className="font-medium">{role.name}</span>
-                        </div>
-                      </td>
-                      <td className="text-slate-500 text-xs">{role.description || '-'}</td>
-                      <td>
-                        <span className="badge badge-blue text-2xs">{countPerms(role)} permissions</span>
-                      </td>
-                      <td>{role.is_system && <span className="badge badge-gray text-2xs">System</span>}</td>
-                      <td>
-                        <div className="flex items-center gap-1">
-                          <button onClick={() => setRoleModal({ open: true, editing: role })} className="p-1 text-slate-400 hover:text-blue-600"><Pencil size={13} /></button>
-                          {!role.is_system && (
-                            <button onClick={() => { if (confirm(`Delete role "${role.name}"?`)) deleteRoleMutation.mutate(role.id); }} className="p-1 text-slate-400 hover:text-red-600"><Trash2 size={13} /></button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Modals */}
-      {userModal.open && (
-        <UserModal
-          onClose={() => setUserModal({ open: false, editing: null })}
-          onSaved={() => qc.invalidateQueries({ queryKey: ['users'] })}
-          roles={roles}
-          editing={userModal.editing}
-        />
-      )}
-      {roleModal.open && (
-        <RoleModal
-          onClose={() => setRoleModal({ open: false, editing: null })}
-          onSaved={() => qc.invalidateQueries({ queryKey: ['roles'] })}
-          editing={roleModal.editing}
-        />
-      )}
     </div>
   );
 }

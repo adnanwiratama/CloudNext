@@ -64,139 +64,121 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex" style={{ backgroundColor: '#0f1f35' }}>
 
-      {/* ═══════════ LEFT PANEL – Login Form ═══════════ */}
-      <div className="w-full max-w-sm flex flex-col bg-white shadow-2xl">
+      {/* ═══════════ LEFT PANEL – Login Card (dark translucent, NetSuite-style) ═══════════ */}
+      <div className="w-full max-w-md flex items-center p-8 flex-shrink-0">
+        <div className="w-full rounded-xl border border-white/10 shadow-2xl p-8 backdrop-blur-md"
+             style={{ backgroundColor: 'rgba(15, 31, 53, 0.55)' }}>
 
-        {/* Header */}
-        <div className="px-8 pt-8 pb-6 border-b border-slate-100">
           {/* Logo */}
           <div className="flex items-center gap-2.5 mb-8">
-            <div className="w-9 h-9 flex items-center justify-center"
-                 style={{ background: '#1e3a5f', borderRadius: '4px' }}>
-              <span className="text-white text-sm font-black tracking-tight">CN</span>
+            <img src="/cloudnext-logo.png" alt="CloudNext ERP"
+              className="h-12 max-w-[260px] object-contain bg-white/90 rounded px-2 py-1"
+              onError={(e) => {
+                const img = e.currentTarget as HTMLImageElement;
+                img.style.display = 'none';
+                (img.nextElementSibling as HTMLElement | null)?.style.setProperty('display', 'flex');
+              }} />
+            {/* Fallback text (shown only if the logo image is missing) */}
+            <div className="items-center gap-2.5" style={{ display: 'none' }}>
+              <div className="w-9 h-9 flex items-center justify-center" style={{ background: '#2563eb', borderRadius: '4px' }}>
+                <span className="text-white text-sm font-black tracking-tight">CN</span>
+              </div>
+              <div>
+                <div className="text-lg font-bold text-white leading-none">CloudNext</div>
+                <div className="text-xs text-slate-400 leading-none mt-0.5">ERP Platform</div>
+              </div>
             </div>
-            <div>
-              <div className="text-lg font-bold text-slate-900 leading-none">CloudNext</div>
-              <div className="text-xs text-slate-400 leading-none mt-0.5">ERP Platform</div>
-            </div>
           </div>
 
-          <h2 className="text-xl font-semibold text-slate-900">Log In</h2>
-        </div>
+          <h2 className="text-2xl font-semibold text-white mb-6">Log In</h2>
 
-        {/* Form */}
-        <form onSubmit={handleSubmit(onSubmit)} className="px-8 py-6 flex-1 space-y-4">
+          {/* Form */}
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
 
-          {/* Company Code */}
-          <div>
-            <label className="block text-sm text-slate-600 mb-1">Company Code</label>
-            <input
-              {...register('companyCode')}
-              className="w-full px-3 py-2.5 border border-slate-300 text-sm rounded
-                         focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500
-                         placeholder:text-slate-400"
-              placeholder="e.g. CMI"
-            />
-          </div>
-
-          {/* Email */}
-          <div>
-            <label className="block text-sm text-slate-600 mb-1">Email address</label>
-            <input
-              {...register('email', {
-                required: 'Email is required',
-                pattern: { value: /\S+@\S+\.\S+/, message: 'Invalid email' },
-              })}
-              type="email"
-              autoComplete="username"
-              className={`w-full px-3 py-2.5 border text-sm rounded
-                         focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500
-                         placeholder:text-slate-400
-                         ${errors.email ? 'border-red-400 bg-red-50' : 'border-slate-300'}`}
-              placeholder="your@email.com"
-            />
-            {errors.email && (
-              <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
-                <span className="w-3.5 h-3.5 rounded-full bg-red-500 text-white text-center inline-flex items-center justify-center text-2xs leading-none">!</span>
-                {errors.email.message}
-              </p>
-            )}
-          </div>
-
-          {/* Password */}
-          <div>
-            <label className="block text-sm text-slate-600 mb-1">Password</label>
-            <div className="relative">
+            {/* Company Code */}
+            <div className="rounded border border-white/15 bg-white/5 px-3 py-2 focus-within:border-blue-400 transition-colors">
+              <label className="block text-2xs font-medium text-slate-300 uppercase tracking-wide">Company Code</label>
               <input
-                {...register('password', { required: 'Password is required' })}
-                type={showPassword ? 'text' : 'password'}
-                autoComplete="current-password"
-                className={`w-full px-3 py-2.5 border text-sm rounded pr-10
-                           focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500
-                           placeholder:text-slate-400
-                           ${errors.password ? 'border-red-400 bg-red-50' : 'border-slate-300'}`}
-                placeholder="Your password"
+                {...register('companyCode')}
+                className="w-full bg-transparent text-sm text-white placeholder:text-slate-500 outline-none mt-0.5"
+                placeholder="e.g. CMI"
               />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-              >
-                {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+            </div>
+
+            {/* Email */}
+            <div>
+              <div className={`rounded border px-3 py-2 transition-colors bg-white/5
+                ${errors.email ? 'border-red-400/70' : 'border-white/15 focus-within:border-blue-400'}`}>
+                <label className="block text-2xs font-medium text-slate-300 uppercase tracking-wide">Email address</label>
+                <input
+                  {...register('email', {
+                    required: 'Email is required',
+                    pattern: { value: /\S+@\S+\.\S+/, message: 'Invalid email' },
+                  })}
+                  type="email"
+                  autoComplete="username"
+                  className="w-full bg-transparent text-sm text-white placeholder:text-slate-500 outline-none mt-0.5"
+                  placeholder="your@email.com"
+                />
+              </div>
+              {errors.email && <p className="text-xs text-red-400 mt-1">{errors.email.message}</p>}
+            </div>
+
+            {/* Password */}
+            <div>
+              <div className={`relative rounded border px-3 py-2 transition-colors bg-white/5
+                ${errors.password ? 'border-red-400/70' : 'border-white/15 focus-within:border-blue-400'}`}>
+                <label className="block text-2xs font-medium text-slate-300 uppercase tracking-wide">Password</label>
+                <input
+                  {...register('password', { required: 'Password is required' })}
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  className="w-full bg-transparent text-sm text-white placeholder:text-slate-500 outline-none mt-0.5 pr-8"
+                  placeholder="Your password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+                >
+                  {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                </button>
+              </div>
+              {errors.password && <p className="text-xs text-red-400 mt-1">{errors.password.message}</p>}
+            </div>
+
+            {/* Remember me */}
+            <div className="flex items-center gap-2 pt-1">
+              <input type="checkbox" id="remember" className="w-4 h-4 accent-blue-500" defaultChecked />
+              <label htmlFor="remember" className="text-sm text-slate-200">Remember Me</label>
+            </div>
+
+            {/* Submit – white button */}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-2.5 flex items-center justify-center gap-2 text-sm font-semibold
+                         rounded bg-white text-slate-800 hover:bg-slate-100 disabled:opacity-70 transition-colors"
+            >
+              {loading ? (
+                <><Loader2 size={15} className="animate-spin" /> Signing In...</>
+              ) : (
+                <><Lock size={14} /> Log In</>
+              )}
+            </button>
+
+            <div>
+              <button type="button" className="text-sm text-amber-300 hover:underline">
+                Forgot your password?
               </button>
             </div>
-            {errors.password && (
-              <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
-                <span className="w-3.5 h-3.5 rounded-full bg-red-500 text-white text-center inline-flex items-center justify-center text-2xs leading-none">!</span>
-                {errors.password.message}
-              </p>
-            )}
-          </div>
 
-          {/* Remember me */}
-          <div className="flex items-center gap-2">
-            <input type="checkbox" id="remember" className="w-3.5 h-3.5 accent-blue-600" defaultChecked />
-            <label htmlFor="remember" className="text-sm text-slate-600">Remember Me</label>
-          </div>
-
-          {/* Submit */}
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full py-2.5 flex items-center justify-center gap-2 text-sm font-medium
-                       rounded text-white transition-colors"
-            style={{ backgroundColor: loading ? '#94a3b8' : '#1e3a5f' }}
-            onMouseEnter={e => { if (!loading) (e.target as HTMLButtonElement).style.backgroundColor = '#254d7a'; }}
-            onMouseLeave={e => { if (!loading) (e.target as HTMLButtonElement).style.backgroundColor = '#1e3a5f'; }}
-          >
-            {loading ? (
-              <><Loader2 size={15} className="animate-spin" /> Signing In...</>
-            ) : (
-              <><Lock size={14} /> Log In</>
-            )}
-          </button>
-
-          <div className="text-center">
-            <button type="button" className="text-sm text-blue-600 hover:underline">
-              Forgot your password?
-            </button>
-          </div>
-        </form>
-
-        {/* Demo credentials */}
-        <div className="px-8 py-4 border-t border-slate-100 bg-blue-50">
-          <p className="text-xs font-semibold text-blue-800 mb-1.5">Demo Access</p>
-          <div className="text-xs text-blue-700 space-y-0.5 font-mono">
-            <div>Company: <span className="font-bold">CMI</span></div>
-            <div>Email: <span className="font-bold">admin@cloudmfg.co.id</span></div>
-            <div>Password: <span className="font-bold">CloudERP@2026</span></div>
-          </div>
-        </div>
-
-        <div className="px-8 py-3 text-center">
-          <p className="text-xs text-slate-400">
-            By logging in, you agree to the <span className="text-blue-500 cursor-pointer hover:underline">Terms of Use</span> and <span className="text-blue-500 cursor-pointer hover:underline">Privacy Policy</span>.
-          </p>
+            <p className="text-xs text-slate-400 pt-2 leading-relaxed">
+              By clicking on the Log In button, you understand and agree to the{' '}
+              <span className="text-amber-300 cursor-pointer hover:underline">Terms of Use</span> and{' '}
+              <span className="text-amber-300 cursor-pointer hover:underline">Privacy Policy</span>.
+            </p>
+          </form>
         </div>
       </div>
 

@@ -4,11 +4,12 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Search, Bell, HelpCircle, ChevronDown, ChevronRight, LogOut,
   Settings, User, Plus, X, Home, Star, RefreshCw, MessageSquare, Grid,
-  List,
+  List, History,
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
 import api from '../../services/api';
 import toast from 'react-hot-toast';
+import { usePermissions } from '../../hooks/usePermissions';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MENU DATA
@@ -100,6 +101,8 @@ const NAV_MENUS: NavMenu[] = [
         submenu: [
           { label: 'New Expense Report', path: '/employee/expenses/new', isNew: true  },
           { label: 'Expense Reports',    path: '/employee/expenses',     isList: true },
+          { label: 'New Expense Payment', path: '/employee/expense-payments/new', isNew: true  },
+          { label: 'Expense Payments',    path: '/employee/expense-payments',     isList: true },
         ],
       },
       {
@@ -112,8 +115,6 @@ const NAV_MENUS: NavMenu[] = [
           { label: 'Transfer Inventory',       path: '/inventory/transfers',          isList: true },
           { label: 'New Transfer Order',       path: '/inventory/transfer-orders/new',isNew: true  },
           { label: 'Transfer Orders',          path: '/inventory/transfer-orders',    isList: true },
-          { label: 'New Transfer Bin',         path: '/inventory/transfer-bins/new',  isNew: true  },
-          { label: 'Transfer Bins',            path: '/inventory/transfer-bins',      isList: true },
         ],
       },
       {
@@ -146,31 +147,40 @@ const NAV_MENUS: NavMenu[] = [
           { label: 'Accounts',               path: '/accounting/accounts',       isList: true },
           { label: 'Currencies',             path: '/settings/currencies',       isList: true },
           { label: 'Currency Exchange Rates',path: '/settings/exchange-rates',   isList: true },
-          { label: 'Items',                  path: '/items',                     isList: true },
           { label: 'Unit Of Measure',        path: '/settings/uom',              isList: true },
+        ],
+      },
+      {
+        label: 'Items',
+        newPath: '/items/new',
+        submenu: [
+          { label: 'New Item', path: '/items/new', isNew: true  },
+          { label: 'Items',    path: '/items',     isList: true },
         ],
       },
       {
         label: 'Supply Chain',
         newPath: '/manufacturing/boms',
         submenu: [
-          { label: 'Bins',              path: '/settings/bins',          isList: true },
           { label: 'Bills Of Material', path: '/manufacturing/boms',     isList: true },
         ],
       },
       {
         label: 'Employees',
-        newPath: '/lists/employees',
+        newPath: '/lists/employees/new',
         submenu: [
-          { label: 'Employees', path: '/lists/employees', isList: true },
+          { label: 'New Employee', path: '/lists/employees/new', isNew: true  },
+          { label: 'Employees',    path: '/lists/employees',     isList: true },
         ],
       },
       {
         label: 'Relationship',
-        newPath: '/customers',
+        newPath: '/customers/new',
         submenu: [
-          { label: 'Customers', path: '/customers', isList: true },
-          { label: 'Vendors',   path: '/vendors',   isList: true },
+          { label: 'New Customer', path: '/customers/new', isNew: true  },
+          { label: 'Customers',    path: '/customers',     isList: true },
+          { label: 'New Vendor',   path: '/vendors/new',   isNew: true  },
+          { label: 'Vendors',      path: '/vendors',       isList: true },
         ],
       },
     ],
@@ -200,33 +210,33 @@ const NAV_MENUS: NavMenu[] = [
         label: 'Receivables',
         newPath: '/accounting/reports/ar-aging',
         submenu: [
-          { label: 'A/R Aging Summary', path: '/accounting/reports/ar-aging',        isList: true },
-          { label: 'A/R Aging Detail',  path: '/accounting/reports/ar-aging-detail', isList: true },
+          { label: 'A/R Aging Summary', path: '/accounting/reports/ar-aging', isList: true },
+          { label: 'A/R Aging Detail',  path: '/reports/ar-aging-detail',     isList: true },
         ],
       },
       {
         label: 'Purchase Order',
-        newPath: '/reports/po-by-vendor',
+        newPath: '/reports/po-by-customer',
         submenu: [
-          { label: 'Purchase Order by Customer', path: '/reports/po-by-vendor',   isList: true },
-          { label: 'Purchase Order by Items',    path: '/reports/po-by-items',    isList: true },
+          { label: 'Purchase Order by Vendor', path: '/reports/po-by-customer', isList: true },
+          { label: 'Purchase Order by Items',  path: '/reports/po-by-items',    isList: true },
         ],
       },
       {
         label: 'Purchases',
-        newPath: '/reports/purchases-by-vendor',
+        newPath: '/reports/purchases-by-customer',
         submenu: [
-          { label: 'Purchases by Customer',      path: '/reports/purchases-by-vendor', isList: true },
-          { label: 'Purchases by Items',         path: '/reports/purchases-by-items',  isList: true },
-          { label: 'Purchases by Purchases Rep', path: '/reports/purchases-by-rep',    isList: true },
+          { label: 'Purchases by Vendor',        path: '/reports/purchases-by-customer', isList: true },
+          { label: 'Purchases by Items',         path: '/reports/purchases-by-items',    isList: true },
+          { label: 'Purchases by Purchases Rep', path: '/reports/purchases-by-rep',      isList: true },
         ],
       },
       {
         label: 'Payables',
         newPath: '/accounting/reports/ap-aging',
         submenu: [
-          { label: 'A/P Aging Summary', path: '/accounting/reports/ap-aging',        isList: true },
-          { label: 'A/P Aging Detail',  path: '/accounting/reports/ap-aging-detail', isList: true },
+          { label: 'A/P Aging Summary', path: '/accounting/reports/ap-aging', isList: true },
+          { label: 'A/P Aging Detail',  path: '/reports/ap-aging-detail',     isList: true },
         ],
       },
       {
@@ -289,6 +299,13 @@ const NAV_MENUS: NavMenu[] = [
         ],
       },
       {
+        label: 'Auto Generated Number',
+        newPath: '/settings/auto-numbers',
+        submenu: [
+          { label: 'Auto Generated Number', path: '/settings/auto-numbers', isList: true },
+        ],
+      },
+      {
         label: 'Import/Export',
         newPath: '/settings/import-csv',
         submenu: [
@@ -320,6 +337,68 @@ const NAV_MENUS: NavMenu[] = [
   },
 ];
 
+// Maps a menu path to its role-matrix permission key. If a path has no mapping
+// here, it is never hidden by the role filter (backward compatible). A NONE
+// level on the mapped key hides the menu entry entirely (per spec).
+const PATH_PERM: { prefix: string; key: string }[] = [
+  // Bank
+  { prefix: '/bank/write-checks',  key: 'check' },
+  { prefix: '/bank/checks-list',   key: 'check' },
+  { prefix: '/bank/make-deposit',  key: 'deposit' },
+  { prefix: '/bank/deposits-list', key: 'deposit' },
+  { prefix: '/bank/transfer-funds', key: 'transfer_order' },
+  { prefix: '/bank/transfers-list', key: 'transfer_order' },
+  // Purchases
+  { prefix: '/purchasing/requisitions', key: 'purchase_requisition' },
+  { prefix: '/purchasing/orders',       key: 'purchase_order' },
+  { prefix: '/purchasing/receipts',     key: 'item_receipt' },
+  { prefix: '/purchasing/bills',        key: 'vendor_bill' },
+  { prefix: '/purchasing/payments',     key: 'bill_payment' },
+  { prefix: '/purchasing/prepayments',  key: 'bill_payment' },
+  { prefix: '/purchasing/vendor-returns', key: 'vendor_return' },
+  { prefix: '/purchasing/vendor-credits', key: 'vendor_credit' },
+  // Sales
+  { prefix: '/sales/quotations',  key: 'quotation' },
+  { prefix: '/sales/orders',      key: 'sales_order' },
+  { prefix: '/sales/fulfillments', key: 'item_fulfillment' },
+  { prefix: '/sales/invoices',    key: 'invoice' },
+  { prefix: '/sales/payments',    key: 'customer_payment' },
+  { prefix: '/sales/deposits',    key: 'deposit' },
+  { prefix: '/sales/return-authorizations', key: 'return_authorization' },
+  { prefix: '/sales/credit-memos', key: 'credit_memo' },
+  { prefix: '/sales/refunds',     key: 'customer_refund' },
+  // Employee
+  { prefix: '/employee/expense-payments', key: 'expense_report' },
+  { prefix: '/employee/expenses', key: 'expense_report' },
+  // Inventory
+  { prefix: '/inventory/adjustments',    key: 'inventory_adjustment' },
+  { prefix: '/inventory/transfer-orders', key: 'transfer_order' },
+  { prefix: '/inventory/transfers',      key: 'transfer_order' },
+  // Manufacturing
+  { prefix: '/manufacturing/work-orders',     key: 'work_order' },
+  { prefix: '/manufacturing/assembly-builds', key: 'work_order' },
+  { prefix: '/manufacturing/boms',            key: 'bom' },
+  // Financial
+  { prefix: '/accounting/journals', key: 'journal_entry' },
+  // Lists
+  { prefix: '/items',    key: 'item' },
+  { prefix: '/lists/employees', key: 'employee' },
+  { prefix: '/customers', key: 'customer' },
+  { prefix: '/vendors',   key: 'vendor' },
+];
+
+// Longest-prefix match so '/purchasing/orders' wins over a shorter prefix.
+function permKeyForPath(path: string): string | undefined {
+  let best: string | undefined;
+  let bestLen = -1;
+  for (const { prefix, key } of PATH_PERM) {
+    if ((path === prefix || path.startsWith(prefix + '/') || path.startsWith(prefix)) && prefix.length > bestLen) {
+      best = key; bestLen = prefix.length;
+    }
+  }
+  return best;
+}
+
 const QUICK_CREATE = [
   { label: 'Sales Order',        path: '/sales/orders/new' },
   { label: 'Purchase Order',     path: '/purchasing/orders/new' },
@@ -340,9 +419,36 @@ export default function ERPLayout() {
   const { user, logout } = useAuthStore();
   const navigate          = useNavigate();
   const location          = useLocation();
+  const { canView }       = usePermissions();
+
+  // Hide a path when its mapped permission level is NONE (canView=false).
+  // Unmapped paths are always visible.
+  const pathVisible = (path: string) => {
+    const key = permKeyForPath(path);
+    return key ? canView(key) : true;
+  };
+
+  // Build the role-filtered menu tree:
+  //  - drop submenu entries whose path is NONE
+  //  - drop a MenuItem if its own path is NONE AND it has no visible submenu entries
+  //  - drop a NavMenu if it ends up with no visible items
+  const visibleMenus: NavMenu[] = NAV_MENUS.map(menu => {
+    const items = menu.items.map(item => {
+      const sub = item.submenu?.filter(s => pathVisible(s.path));
+      const ownVisible = pathVisible(item.newPath) || (item.listPath ? pathVisible(item.listPath) : false);
+      // keep item if it has visible submenu entries, or (no submenu) its own path is visible
+      if (item.submenu) {
+        if (!sub || sub.length === 0) return null;
+        return { ...item, submenu: sub };
+      }
+      return ownVisible ? item : null;
+    }).filter(Boolean) as MenuItem[];
+    return { ...menu, items };
+  }).filter(menu => menu.items.length > 0);
 
   const [activeMenu,    setActiveMenu]   = useState<string | null>(null);
   const [hoveredItem,   setHoveredItem]  = useState<string | null>(null);
+  const [hoveredLeaf,   setHoveredLeaf]  = useState<string | null>(null);
   const [userMenuOpen,  setUserMenuOpen] = useState(false);
   const [createOpen,    setCreateOpen]   = useState(false);
   const [searchOpen,    setSearchOpen]   = useState(false);
@@ -352,6 +458,13 @@ export default function ERPLayout() {
 
   const menuRef   = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLDivElement>(null);
+
+  // Company logo (shown in the header next to the CloudNext mark).
+  const { data: companyLogo } = useQuery({
+    queryKey: ['company-logo'],
+    queryFn: () => api.get('/api/settings/company').then(r => r.data.data?.logo_url || null),
+    staleTime: 5 * 60 * 1000,
+  });
 
   const { data: notifData } = useQuery({
     queryKey: ['notifications'],
@@ -386,7 +499,7 @@ export default function ERPLayout() {
   }, []);
 
   useEffect(() => {
-    setActiveMenu(null); setHoveredItem(null);
+    setActiveMenu(null); setHoveredItem(null); setHoveredLeaf(null);
     setUserMenuOpen(false); setCreateOpen(false); setSearchOpen(false);
   }, [location.pathname]);
 
@@ -413,16 +526,35 @@ export default function ERPLayout() {
     <div className="flex flex-col h-screen bg-erp-bg-page overflow-hidden">
 
       {/* ═══ ROW 1: TOP HEADER ═══ */}
-      <header className="h-11 bg-white flex items-center px-0 flex-shrink-0 shadow-sm border-b border-slate-200 z-50">
-        <Link to="/" className="flex items-center gap-2 px-4 h-full border-r border-slate-200 flex-shrink-0 hover:bg-slate-50 transition-colors">
-          <div className="w-6 h-6 bg-blue-500 flex items-center justify-center" style={{borderRadius:'3px'}}>
-            <span className="text-white text-xs font-black">CN</span>
-          </div>
-          <div>
-            <div className="text-slate-800 font-bold text-sm leading-none">CloudNext</div>
-            <div className="text-slate-500 text-2xs leading-none">ERP Platform</div>
+      <header className="h-16 bg-white flex items-center px-0 flex-shrink-0 shadow-sm border-b border-slate-200 z-50">
+        {/* SECTION 1 (fixed): CloudNext ERP product logo — links home, never changes.
+            Falls back to a text logo until /cloudnext-logo.png is added to public/. */}
+        <Link to="/" className="flex items-center px-4 h-full border-r border-slate-200 flex-shrink-0 hover:bg-slate-50 transition-colors">
+          <img src="/cloudnext-logo.png" alt="CloudNext ERP"
+            className="h-10 max-w-[220px] object-contain"
+            onError={(e) => {
+              const img = e.currentTarget as HTMLImageElement;
+              img.style.display = 'none';
+              (img.nextElementSibling as HTMLElement | null)?.style.setProperty('display', 'flex');
+            }} />
+          {/* Fallback text brand (hidden once the image loads) */}
+          <div className="items-center gap-2" style={{ display: 'none' }}>
+            <div className="w-9 h-9 bg-blue-600 flex items-center justify-center rounded">
+              <span className="text-white text-sm font-black">CN</span>
+            </div>
+            <div className="leading-none">
+              <div className="text-slate-800 font-bold text-base">CloudNext</div>
+              <div className="text-slate-400 text-2xs">ERP</div>
+            </div>
           </div>
         </Link>
+
+        {/* SECTION 2 (dynamic): customer company logo from Company Information upload */}
+        {companyLogo && (
+          <div className="flex items-center px-4 h-full border-r border-slate-200 flex-shrink-0">
+            <img src={companyLogo} alt="Company logo" className="h-10 max-w-[200px] object-contain" />
+          </div>
+        )}
 
         <div className="flex items-center h-full border-r border-slate-200 px-1 flex-shrink-0">
           <Link to="/" className="flex items-center justify-center w-8 h-8 rounded text-slate-600 hover:bg-slate-100" title="Home"><Home size={15} /></Link>
@@ -431,7 +563,7 @@ export default function ERPLayout() {
         </div>
 
         {/* Search */}
-        <div ref={searchRef} className="flex-1 px-3 max-w-2xl relative">
+        <div ref={searchRef} className="px-3 w-full max-w-md relative">
           <div onClick={() => setSearchOpen(true)}
             className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded cursor-text hover:bg-slate-100 focus-within:bg-white focus-within:border-blue-400 transition-all">
             <Search size={14} className="text-slate-400 flex-shrink-0" />
@@ -466,7 +598,10 @@ export default function ERPLayout() {
           )}
         </div>
 
-        {/* Right toolbar */}
+        {/* Spacer pushes the Create → user/role cluster to the far right */}
+        <div className="flex-1" />
+
+        {/* Right toolbar: Create → Help → Feedback → Notifications → User/Role (flush right) */}
         <div className="flex items-center h-full gap-0.5 px-2 flex-shrink-0">
           {/* Quick create */}
           <div className="relative">
@@ -554,21 +689,29 @@ export default function ERPLayout() {
         </div>
       </header>
 
-      {/* ═══ ROW 2: NAV BAR ═══ */}
-      <div ref={menuRef} className="bg-erp-subnav h-9 flex items-stretch flex-shrink-0 z-40 relative shadow-sm">
-        <Link to="/"
-          className={`flex items-center gap-1.5 px-4 text-sm font-medium transition-colors ${location.pathname === '/' ? 'bg-white text-slate-800' : 'text-white hover:bg-erp-subnav-hover'}`}>
-          <Home size={14}/><span>Home</span>
-        </Link>
+      {/* ═══ ROW 2: NAV BAR (NetSuite-style slate-blue bar) ═══ */}
+      <div ref={menuRef} className="bg-erp-subnav h-10 flex items-stretch flex-shrink-0 z-40 relative shadow-sm">
+        {/* Left icon group: history / favorites / home */}
+        <div className="flex items-stretch">
+          <button onClick={() => navigate(-1)} className="flex items-center justify-center px-2.5 text-white/90 hover:bg-erp-subnav-hover transition-colors" title="Back">
+            <History size={16}/>
+          </button>
+          <button className="flex items-center justify-center px-2.5 text-white/90 hover:bg-erp-subnav-hover transition-colors" title="Favorites">
+            <Star size={16}/>
+          </button>
+          <Link to="/"
+            className={`flex items-center justify-center px-3 transition-colors ${location.pathname === '/' ? 'bg-white text-slate-800' : 'text-white/90 hover:bg-erp-subnav-hover'}`} title="Home">
+            <Home size={16}/>
+          </Link>
+        </div>
 
-        {NAV_MENUS.map(menu => (
+        {visibleMenus.map(menu => (
           <div key={menu.label} className="relative">
             <button
               onClick={() => setActiveMenu(activeMenu === menu.label ? null : menu.label)}
               onMouseEnter={() => setActiveMenu(menu.label)}
-              className={`flex items-center gap-1 px-3 h-full text-sm font-medium transition-colors ${activeMenu === menu.label ? 'bg-white text-slate-800' : 'text-white hover:bg-erp-subnav-hover'}`}>
+              className={`flex items-center gap-1 px-4 h-full text-sm font-normal transition-colors ${activeMenu === menu.label ? 'bg-white text-slate-800' : 'text-white hover:bg-erp-subnav-hover'}`}>
               <span>{menu.label}</span>
-              <ChevronDown size={11} className={`transition-transform ${activeMenu === menu.label ? 'rotate-180' : ''}`}/>
               {menu.label === 'Transactions' && pending > 0 && (
                 <span className="ml-1 px-1.5 py-0.5 bg-red-500 text-white text-2xs rounded-full font-bold">{pending}</span>
               )}
@@ -581,37 +724,85 @@ export default function ERPLayout() {
                 style={{borderRadius:'0 0 3px 3px'}}
                 onMouseLeave={() => { setActiveMenu(null); setHoveredItem(null); }}
               >
-                {menu.items.map(item => (
-                  <div key={item.label} className="relative"
-                    onMouseEnter={() => item.submenu ? setHoveredItem(item.label) : setHoveredItem(null)}
-                    onMouseLeave={() => item.submenu && setHoveredItem(null)}
-                  >
-                    {/* Click → go directly to form (newPath) */}
-                    <Link to={item.newPath}
-                      className="flex items-center justify-between px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors">
-                      <span>{item.label}</span>
-                      {item.submenu && <ChevronRight size={13} className="text-slate-400"/>}
-                    </Link>
+                {menu.items.map(item => {
+                  // Use the New-form + "List" sub-flyout pattern for any group that
+                  // has explicit "New" entries (all of Transactions, plus the Lists
+                  // records Customer/Vendor/Employee/Items). Pure list groups
+                  // (Reports, Accounting master data, …) just render their links.
+                  const newEntries = (item.submenu || []).filter(s => s.isNew);
+                  const isTxn = newEntries.length > 0;
+                  const listEntries = (item.submenu || []).filter(s => s.isList);
+                  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+                  const leaves = newEntries.length
+                    ? newEntries.map(ne => {
+                        const name = ne.label.replace(/^New\s+/i, '').trim();
+                        // Pair by PATH first (reliable across plural/word-order label
+                        // differences): "/x/new" ↔ "/x". Fall back to label matching.
+                        const basePath = ne.path.replace(/\/new$/i, '');
+                        const list = listEntries.find(le => le.path === basePath)
+                          || listEntries.find(le =>
+                              norm(le.label).includes(norm(name)) || norm(name).includes(norm(le.label.replace(/s?\s*list$/i, ''))));
+                        return { key: `${item.label}:${ne.label}`, name, newPath: ne.path, listPath: list?.path };
+                      })
+                    : [{ key: `${item.label}:self`, name: item.label, newPath: item.newPath, listPath: listEntries[0]?.path }];
 
-                    {/* Submenu: Only List entries (no "New") */}
-                    {item.submenu && hoveredItem === item.label && (
-                      <div
-                        className="absolute left-full top-0 bg-white border border-slate-200 shadow-mega z-50 w-60 py-1 -ml-px"
-                        style={{borderRadius:'0 3px 3px 0'}}
-                        onMouseEnter={() => setHoveredItem(item.label)}
-                      >
-                        {item.submenu
-                          .filter(sub => sub.isList)
-                          .map(sub => (
-                            <Link key={sub.path} to={sub.path}
-                              className="flex items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors">
-                              <span>{sub.label.replace(' List', '').replace('s List', 's')}</span>
-                            </Link>
-                          ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
+                  return (
+                    <div key={item.label} className="relative"
+                      onMouseEnter={() => item.submenu ? setHoveredItem(item.label) : setHoveredItem(null)}
+                      onMouseLeave={() => { if (item.submenu) { setHoveredItem(null); setHoveredLeaf(null); } }}
+                    >
+                      {/* Group row → clicking opens the group default page/form */}
+                      <Link to={item.newPath}
+                        className="flex items-center justify-between px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors">
+                        <span>{item.label}</span>
+                        {item.submenu && <ChevronRight size={13} className="text-slate-400"/>}
+                      </Link>
+
+                      {item.submenu && hoveredItem === item.label && (
+                        <div
+                          className="absolute left-full top-0 bg-white border border-slate-200 shadow-mega z-50 w-56 py-1 -ml-px"
+                          style={{borderRadius:'0 3px 3px 0'}}
+                          onMouseEnter={() => setHoveredItem(item.label)}
+                        >
+                          {isTxn
+                            ? /* Transactions: each type → New form; hover → "List" flyout */
+                              leaves.map(leaf => (
+                                <div key={leaf.key} className="relative"
+                                  onMouseEnter={() => setHoveredLeaf(leaf.key)}
+                                  onMouseLeave={() => setHoveredLeaf(null)}
+                                >
+                                  <Link to={leaf.newPath}
+                                    className="flex items-center justify-between px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors">
+                                    <span>{leaf.name}</span>
+                                    {leaf.listPath && <ChevronRight size={13} className="text-slate-400"/>}
+                                  </Link>
+
+                                  {leaf.listPath && hoveredLeaf === leaf.key && (
+                                    <div
+                                      className="absolute left-full top-0 bg-white border border-slate-200 shadow-mega z-50 w-40 py-1 -ml-px"
+                                      style={{borderRadius:'0 3px 3px 0'}}
+                                      onMouseEnter={() => setHoveredLeaf(leaf.key)}
+                                    >
+                                      <Link to={leaf.listPath}
+                                        className="flex items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors">
+                                        <span>List</span>
+                                      </Link>
+                                    </div>
+                                  )}
+                                </div>
+                              ))
+                            : /* Reports / Lists / Setup / etc.: plain links, no "List" level */
+                              (item.submenu || []).filter(s => s.isList).map(sub => (
+                                <Link key={sub.path} to={sub.path}
+                                  className="flex items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors">
+                                  <span>{sub.label}</span>
+                                </Link>
+                              ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

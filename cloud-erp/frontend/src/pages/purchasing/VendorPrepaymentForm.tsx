@@ -40,7 +40,8 @@ export default function VendorPrepaymentForm() {
       const savedId = res.data?.data?.id;
       if (savedId) { try { await uploadFileRows(fileRows, 'vendor_prepayment', String(savedId), api.post.bind(api)); } catch(_) {} }
       toast.success('Vendor prepayment recorded');
-      navigate('/purchasing/prepayments');
+      if (savedId) navigate(`/purchasing/prepayments/${savedId}`, { state: { justSaved: true } });
+      else navigate('/purchasing/prepayments');
     },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to record prepayment'),
   });

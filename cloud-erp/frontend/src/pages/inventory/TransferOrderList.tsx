@@ -16,6 +16,7 @@ export default function TransferOrderList() {
   return (
     <TransactionListPage
       title="Transfer Orders"
+      permissionKey="transfer_order"
       iconBg="bg-emerald-600"
       iconText="TO"
       endpoint="/api/inventory/transfer-orders"

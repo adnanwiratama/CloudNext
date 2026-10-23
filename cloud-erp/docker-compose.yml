@@ -8,7 +8,7 @@ services:
     environment:
       POSTGRES_DB: cloud_erp
       POSTGRES_USER: erp_user
-      POSTGRES_PASSWORD: erp_secure_password
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-erp_secure_password}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -39,12 +39,14 @@ services:
       DB_PORT: 5432
       DB_NAME: cloud_erp
       DB_USER: erp_user
-      DB_PASSWORD: erp_secure_password
+      DB_PASSWORD: ${DB_PASSWORD:-erp_secure_password}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       JWT_SECRET: ${JWT_SECRET:-cloud-erp-super-secret-jwt-key-change-in-production-2026}
       JWT_EXPIRES_IN: 8h
-      CORS_ORIGINS: http://localhost:8080
+      # Same-origin requests go through the frontend nginx /api proxy, but list the
+      # public domain too so direct API calls / tools are accepted.
+      CORS_ORIGINS: ${PUBLIC_ORIGIN:-http://localhost:8080}
     ports:
       - "4000:4000"
     depends_on:
@@ -65,7 +67,35 @@ services:
     depends_on:
       - backend
 
+  # One-shot migration + seed runner. Uses ts-node against the TypeScript
+  # migrations (same as dev) so we don't need pre-compiled JS migrations.
+  # Run with:  docker compose --profile migrate run --rm migrate
+  migrate:
+    image: node:20-alpine
+    container_name: cloud-erp-migrate
+    working_dir: /app
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: cloud_erp
+      DB_USER: erp_user
+      DB_PASSWORD: ${DB_PASSWORD:-erp_secure_password}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - migrate_node_modules:/app/node_modules
+    command: >
+      sh -c "npm install &&
+             npx knex --knexfile src/config/knexfile.ts migrate:latest &&
+             npx knex --knexfile src/config/knexfile.ts seed:run &&
+             echo '✅ Migration and seed complete'"
+    profiles:
+      - migrate
+
 volumes:
+  migrate_node_modules:
   postgres_data:
   uploads:
   logs:

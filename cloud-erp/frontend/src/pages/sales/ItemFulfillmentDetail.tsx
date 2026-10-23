@@ -1,14 +1,16 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronUp, ChevronDown, Loader2, CheckCircle2, FileText } from 'lucide-react';
+import { ChevronUp, ChevronDown, Loader2, CheckCircle2, FileText, Printer } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
-import { formatDate, formatNumber, formatCurrency } from '../../utils/format';
+import { formatDate, formatNumber, formatCurrency, formatStatus } from '../../utils/format';
 import { StatusBadge } from '../../components/common/DataTable';
 import TransactionLink from '../../components/common/TransactionLink';
 import TransactionFilesTab from '../../components/transaction/TransactionFilesTab';
 import TransactionSysInfoTab from '../../components/transaction/TransactionSysInfoTab';
+import { usePrintDocument } from '../../hooks/usePrintDocument';
+import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
 
 export default function ItemFulfillmentDetail() {
   const { id } = useParams<{ id: string }>();
@@ -28,6 +30,48 @@ export default function ItemFulfillmentDetail() {
     queryFn: () => api.get(`/api/sales/fulfillments/${id}`).then(r => r.data.data),
     enabled: !!id, staleTime: 0, refetchOnMount: true,
   });
+
+  // Live per-location stock (Available / On Hand) for the fulfillment's location — mirrors the input form
+  const [stockMap, setStockMap] = useState<Record<string, { onHand: number; available: number }>>({});
+  const ffItemKey = (ff?.lines || []).map((l: any) => l.item_id).filter(Boolean).join(',');
+  useEffect(() => {
+    const ids = Array.from(new Set((ff?.lines || []).map((l: any) => l.item_id).filter(Boolean)));
+    if (ids.length === 0) { setStockMap({}); return; }
+    const params: any = { itemIds: ids.join(',') };
+    if (ff?.location_id) params.locationId = ff.location_id;
+    api.get('/api/sales/stock', { params })
+      .then(r => setStockMap(r.data.data || {}))
+      .catch(() => setStockMap({}));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ffItemKey, ff?.location_id]);
+
+  const { print } = usePrintDocument();
+  const handlePrint = () => {
+    if (!ff) return;
+    print({
+      title: 'Item Fulfillment',
+      number: ff.fulfillment_number,
+      status: formatStatus(ff.status),
+      partyLabel: 'Customer',
+      partyName: ff.customer_name,
+      partyLines: [ff.shipping_address].filter(Boolean),
+      meta: [
+        { label: 'Fulfillment Date', value: formatDate(ff.fulfillment_date) },
+        { label: 'Sales Order', value: ff.so_number || '-' },
+        { label: 'Carrier', value: ff.carrier || '-' },
+        { label: 'Tracking #', value: ff.tracking_number || '-' },
+        { label: 'Warehouse', value: ff.warehouse_name || '-' },
+      ],
+      columns: [
+        { label: 'Item', value: (r: any) => `${r.item_code || ''} ${r.item_name || ''}`.trim() },
+        { label: 'Description', value: (r: any) => r.description || '' },
+        { label: 'Qty Fulfilled', align: 'right', value: (r: any) => formatNumber(r.quantity, 2) },
+        { label: 'Unit', value: (r: any) => r.uom_code || '' },
+      ],
+      rows: ff.lines || [],
+      memo: ff.memo,
+    });
+  };
 
   if (isLoading) return <div className="flex items-center justify-center h-64"><Loader2 className="animate-spin text-blue-500" size={32}/></div>;
   if (!ff) return <div className="p-6 text-red-600">Fulfillment not found.</div>;
@@ -53,8 +97,10 @@ export default function ItemFulfillmentDetail() {
         </div>
         <div className="max-w-screen-xl mx-auto px-4 py-2 flex items-center gap-2">
           <button onClick={() => navigate('/sales/fulfillments')} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Back</button>
+          <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
           {ff.so_id && <button onClick={() => navigate(`/sales/orders/${ff.so_id}`)} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">View SO</button>}
           {ff.status !== 'invoiced' && <button onClick={() => navigate(`/sales/invoices/new?soId=${ff.so_id}`)} className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700"><FileText size={13}/> Create Invoice</button>}
+          <DeleteTransactionButton type="item_fulfillment" id={id!} listPath="/sales/fulfillments" label={ff.fulfillment_number} />
         </div>
       </div>
 
@@ -69,8 +115,8 @@ export default function ItemFulfillmentDetail() {
           {primaryOpen && (
             <div className="px-4 pb-5 border-t border-slate-100">
               <div className="grid grid-cols-3 gap-x-10 gap-y-4 mt-4">
+                {/* Column 1 — mirrors the fulfillment form's left column */}
                 <div className="space-y-3">
-                  <div><div className="text-xs text-slate-500 mb-0.5">Fulfillment #</div><div className="text-sm font-medium text-blue-700 font-mono">{ff.fulfillment_number}</div></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Sales Order</label>
                     <div className="w-full border border-slate-200 rounded text-sm px-2 py-1.5 bg-slate-50">
                       <button onClick={()=>navigate(`/sales/orders/${ff.so_id}`)} className="text-blue-600 hover:underline font-mono">{ff.so_number||'-'}</button>
@@ -79,16 +125,17 @@ export default function ItemFulfillmentDetail() {
                   <div><label className="block text-xs text-slate-500 mb-1">Customer</label><input readOnly value={ff.customer_name||''} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Fulfillment Date</label><input readOnly value={ff.fulfillment_date?.split('T')[0]||''} className={dis}/></div>
                 </div>
+                {/* Column 2 — Carrier / Tracking / Memo */}
+                <div className="space-y-3">
+                  <div><label className="block text-xs text-slate-500 mb-1">Carrier / Shipping Method</label><input readOnly value={ff.carrier||''} className={dis}/></div>
+                  <div><label className="block text-xs text-slate-500 mb-1">Tracking Number</label><input readOnly value={ff.tracking_number||''} className={dis}/></div>
+                  <div><label className="block text-xs text-slate-500 mb-1">Memo</label><textarea readOnly value={ff.memo||''} rows={3} className={`${dis} resize-none`}/></div>
+                </div>
+                {/* Column 3 — Status / Warehouse / Ship To Address */}
                 <div className="space-y-3">
                   <div><label className="block text-xs text-slate-500 mb-1">Status</label><div className="py-1"><StatusBadge status={ff.status}/></div></div>
-                  <div><label className="block text-xs text-slate-500 mb-1">Location</label><input readOnly value={ff.location_name||''} className={dis}/></div>
-                  <div><label className="block text-xs text-slate-500 mb-1">Department</label><input readOnly value={ff.department_name||''} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Warehouse</label><input readOnly value={ff.warehouse_name||''} className={dis}/></div>
-                </div>
-                <div className="space-y-3">
-                  <div><label className="block text-xs text-slate-500 mb-1">Tracking #</label><input readOnly value={ff.tracking_number||''} className={dis}/></div>
-                  <div><label className="block text-xs text-slate-500 mb-1">Carrier</label><input readOnly value={ff.carrier||''} className={dis}/></div>
-                  <div><label className="block text-xs text-slate-500 mb-1">Shipping Address</label><textarea readOnly value={ff.shipping_address||''} rows={2} className={`${dis} resize-none`}/></div>
+                  <div><label className="block text-xs text-slate-500 mb-1">Ship To Address</label><textarea readOnly value={ff.shipping_address||''} rows={2} className={`${dis} resize-none`}/></div>
                 </div>
               </div>
             </div>
@@ -131,6 +178,8 @@ export default function ItemFulfillmentDetail() {
                       <th className="px-3 py-2 text-left font-semibold text-slate-600 w-24">Item Code</th>
                       <th className="px-3 py-2 text-left font-semibold text-slate-600">Item Name</th>
                       <th className="px-3 py-2 text-left font-semibold text-slate-600">Description</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-600 w-24">Available</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-600 w-24">On Hand</th>
                       <th className="px-3 py-2 text-right font-semibold text-slate-600 w-24">Qty Shipped</th>
                       <th className="px-3 py-2 text-left font-semibold text-slate-600 w-14">UOM</th>
                       <th className="px-3 py-2 text-left font-semibold text-slate-600 w-28">Lot/Serial</th>
@@ -138,19 +187,26 @@ export default function ItemFulfillmentDetail() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(ff.lines||[]).length===0?<tr><td colSpan={8} className="px-3 py-4 text-center text-slate-400 italic">No items</td></tr>
-                    :(ff.lines||[]).map((l:any,i:number)=>(
+                    {(ff.lines||[]).length===0?<tr><td colSpan={10} className="px-3 py-4 text-center text-slate-400 italic">No items</td></tr>
+                    :(ff.lines||[]).map((l:any,i:number)=>{
+                      const s = stockMap[l.item_id];
+                      // Stock is stored in base units; show it in the line's unit (base qty / rate).
+                      const rate = Number(l.uom_rate) > 0 ? Number(l.uom_rate) : 1;
+                      return (
                       <tr key={l.id} className="border-t border-slate-100">
                         <td className="px-3 py-1.5 text-slate-400">{i+1}</td>
                         <td className="px-3 py-1.5 font-mono text-xs text-blue-600">{l.item_code}</td>
                         <td className="px-3 py-1.5 font-medium text-slate-700">{l.item_name}</td>
                         <td className="px-3 py-1.5 text-slate-500 text-xs">{l.description||'-'}</td>
+                        <td className="px-3 py-1.5 text-right text-emerald-600">{formatNumber(s ? s.available / rate : 0,2)}</td>
+                        <td className="px-3 py-1.5 text-right text-slate-500">{formatNumber(s ? s.onHand / rate : 0,2)}</td>
                         <td className="px-3 py-1.5 text-right text-emerald-600 font-semibold">{formatNumber(l.quantity,0)}</td>
                         <td className="px-3 py-1.5 text-slate-500">{l.uom_code||'-'}</td>
                         <td className="px-3 py-1.5 text-slate-500">{l.lot_number||l.serial_number||'-'}</td>
                         <td className="px-3 py-1.5 text-slate-500">{l.bin_code||'-'}</td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

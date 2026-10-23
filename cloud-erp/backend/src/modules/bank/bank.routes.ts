@@ -1,9 +1,28 @@
 import { Router, Request, Response } from 'express';
 import db from '../../config/database';
 import { authenticate } from '../../middleware/auth';
+import { enforcePermissions } from '../../middleware/permissions';
+import { resolveTransactionNumber } from '../../utils/sequence';
 
 const router = Router();
 router.use(authenticate);
+router.use(enforcePermissions);
+
+// Ensure bank_deposit_lines carries entity references (customer/vendor/employee)
+// so a deposit line can record who the money came from.
+let _depLineColsEnsured = false;
+async function ensureDepositLineColumns(): Promise<void> {
+  if (_depLineColsEnsured) return;
+  const addCol = async (col: string, build: (t: any) => void) => {
+    if (!(await db.schema.hasColumn('bank_deposit_lines', col))) {
+      await db.schema.alterTable('bank_deposit_lines', build);
+    }
+  };
+  await addCol('entity_customer_id', (t: any) => t.uuid('entity_customer_id').nullable());
+  await addCol('entity_vendor_id',   (t: any) => t.uuid('entity_vendor_id').nullable());
+  await addCol('entity_employee_id', (t: any) => t.uuid('entity_employee_id').nullable());
+  _depLineColsEnsured = true;
+}
 
 // ─── Write Checks ─────────────────────────────────────────────────────────────
 router.get('/write-checks', async (req: Request, res: Response): Promise<void> => {
@@ -95,15 +114,17 @@ router.post('/write-checks', async (req: Request, res: Response): Promise<void> 
     if (!d.bankAccountId) { res.status(400).json({ success: false, error: 'Bank Account is required' }); return; }
     if (!d.amount || Number(d.amount) <= 0) { res.status(400).json({ success: false, error: 'Amount must be greater than 0' }); return; }
 
-    const checkNumber = d.checkNumber || `CHK-${Date.now()}`;
+    // Transaction/document number follows the Auto-Generated Number setup
+    // (transaction_sequences 'bank_check'). If override is allowed and a manual
+    // document number is supplied, it is used; otherwise it is auto-generated.
+    const docNumber = await resolveTransactionNumber(companyId, 'bank_check', d.documentNumber);
 
-    // Transaction number = always auto-generated CH/YYYY-NNNNNN
-    // check_number field = user-supplied manual check # (for bank check number)
+    // check_number field = user-supplied manual check # (for the physical bank check #)
     const [check] = await db('bank_checks').insert({
       company_id: companyId,
-      check_number: d.documentNumber || checkNumber,  // transaction number = doc number
-      document_number: d.documentNumber || checkNumber,
-      check_number_manual: d.checkNumber || null,      // user-entered check # field
+      check_number: docNumber,                          // transaction number = doc number
+      document_number: docNumber,
+      check_number_manual: d.checkNumber || null,       // user-entered physical check # field
       check_date: d.checkDate || new Date(),
       pay_to: d.payTo,
       vendor_id: d.vendorId || null,
@@ -170,12 +191,12 @@ router.post('/write-checks', async (req: Request, res: Response): Promise<void> 
 
     // Auto post GL: Dr. Expense/Item/PPN → Cr. Bank (balance with grossAmt)
     try {
-      const jeNum = `JE-CHK-${checkNumber}`;
+      const jeNum = `JE-CHK-${docNumber}`;
       const [je] = await db('journal_entries').insert({
         company_id: companyId,
         journal_number: jeNum,
         entry_date: d.checkDate || new Date(),
-        memo: `Write Check - ${d.payTo} - ${checkNumber}`,
+        memo: `Write Check - ${d.payTo} - ${docNumber}`,
         source_type: 'bank_check',
         source_id: check.id,
         status: 'posted',
@@ -193,6 +214,7 @@ router.post('/write-checks', async (req: Request, res: Response): Promise<void> 
             journal_id: jeId, line_number: lineNum++,
             account_id: l.accountId,
             debit: Number(l.amount), credit: 0,
+            debit_base: Number(l.amount), credit_base: 0,
             memo: l.memo || `Expense - ${d.payTo}`,
           });
           totalDebit += Number(l.amount);
@@ -210,6 +232,7 @@ router.post('/write-checks', async (req: Request, res: Response): Promise<void> 
               journal_id: jeId, line_number: lineNum++,
               account_id: ppnAcct.id,
               debit: Number(l.taxAmt), credit: 0,
+              debit_base: Number(l.taxAmt), credit_base: 0,
               memo: `PPN Input Tax`,
             });
             totalDebit += Number(l.taxAmt);
@@ -229,6 +252,7 @@ router.post('/write-checks', async (req: Request, res: Response): Promise<void> 
               journal_id: jeId, line_number: lineNum++,
               account_id: acctId,
               debit: Number(l.amount), credit: 0,
+              debit_base: Number(l.amount), credit_base: 0,
               memo: `${item?.name || ''} - ${d.payTo}`.trim(),
             });
             totalDebit += Number(l.amount);
@@ -241,6 +265,7 @@ router.post('/write-checks', async (req: Request, res: Response): Promise<void> 
                 journal_id: jeId, line_number: lineNum++,
                 account_id: ppnAcct.id,
                 debit: Number(l.taxAmt), credit: 0,
+                debit_base: Number(l.taxAmt), credit_base: 0,
                 memo: `PPN Input Tax (Items)`,
               });
               totalDebit += Number(l.taxAmt);
@@ -257,9 +282,12 @@ router.post('/write-checks', async (req: Request, res: Response): Promise<void> 
           journal_id: jeId, line_number: lineNum,
           account_id: d.bankAccountId,
           debit: 0, credit: totalDebit,
-          memo: `Bank payment - ${checkNumber}`,
+          debit_base: 0, credit_base: totalDebit,
+          memo: `Bank payment - ${docNumber}`,
         });
       }
+      // Record header totals so JE lists show the amount.
+      await db('journal_entries').where({ id: jeId }).update({ total_debit: totalDebit, total_credit: totalDebit });
     } catch (glErr: any) { console.error('[GL ERROR] Write Check GL:', glErr.message); }
 
     // Log creation
@@ -450,11 +478,12 @@ router.get('/deposits', async (req: Request, res: Response): Promise<void> => {
 
 router.post('/deposits', async (req: Request, res: Response): Promise<void> => {
   try {
+    await ensureDepositLineColumns();
     const d = req.body;
     const companyId = req.user!.companyId;
     if (!d.bankAccountId) { res.status(400).json({ success: false, error: 'Bank Account is required' }); return; }
 
-    const depositNumber = d.documentNumber || `DEP-${Date.now()}`;
+    const depositNumber = await resolveTransactionNumber(companyId, 'bank_deposit', d.documentNumber);
     const lines = d.lines || [];
     const totalAmount = lines.reduce((s: number, l: any) => s + Number(l.amount || 0), 0);
 
@@ -484,6 +513,9 @@ router.post('/deposits', async (req: Request, res: Response): Promise<void> => {
           amount: Number(l.amount || 0),
           department_id: l.department || l.departmentId || null,
           location_id: l.location || l.locationId || null,
+          entity_customer_id: l.entityCustomerId || null,
+          entity_vendor_id: l.entityVendorId || null,
+          entity_employee_id: l.entityEmployeeId || null,
         })));
       }
 
@@ -509,12 +541,15 @@ router.post('/deposits', async (req: Request, res: Response): Promise<void> => {
         }).returning('*');
 
         const jeLines: any[] = [
-          { journal_id: je.id, line_number: 1, account_id: d.bankAccountId, debit: totalAmount, credit: 0, department_id: d.departmentId || null, location_id: d.locationId || null, memo: `Deposit ${depositNumber}` },
+          { journal_id: je.id, line_number: 1, account_id: d.bankAccountId, debit: totalAmount, credit: 0, debit_base: totalAmount, credit_base: 0, department_id: d.departmentId || null, location_id: d.locationId || null, memo: `Deposit ${depositNumber}` },
           ...lines.map((l: any, i: number) => ({
             journal_id: je.id, line_number: i + 2,
             account_id: l.accountId || null, debit: 0, credit: Number(l.amount || 0),
+            debit_base: 0, credit_base: Number(l.amount || 0),
             department_id: l.department || l.departmentId || null,
             location_id: l.location || l.locationId || null,
+            entity_customer_id: l.entityCustomerId || null,
+            entity_vendor_id: l.entityVendorId || null,
             memo: l.memo || null,
           })),
         ];
@@ -526,6 +561,97 @@ router.post('/deposits', async (req: Request, res: Response): Promise<void> => {
 
     res.status(201).json({ success: true, data: { ...result, deposit_number: depositNumber } });
   } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: 'Failed to record deposit' }); }
+});
+
+// PUT /deposits/:id — edit an existing deposit (re-posts the GL from scratch).
+router.put('/deposits/:id', async (req: Request, res: Response): Promise<void> => {
+  try {
+    await ensureDepositLineColumns();
+    const d = req.body;
+    const companyId = req.user!.companyId;
+    const depositId = req.params.id;
+
+    const existing = await db('bank_deposits').where({ id: depositId, company_id: companyId }).first();
+    if (!existing) { res.status(404).json({ success: false, error: 'Deposit not found' }); return; }
+    if (!d.bankAccountId) { res.status(400).json({ success: false, error: 'Bank Account is required' }); return; }
+
+    const lines = d.lines || [];
+    const totalAmount = lines.reduce((s: number, l: any) => s + Number(l.amount || 0), 0);
+    const depositNumber = existing.deposit_number;
+
+    await db.transaction(async (trx) => {
+      await trx('bank_deposits').where({ id: depositId }).update({
+        deposit_date: d.depositDate || existing.deposit_date,
+        bank_account_id: d.bankAccountId,
+        reference: d.reference ?? existing.reference,
+        memo: d.memo ?? existing.memo,
+        total_amount: totalAmount,
+        department_id: d.departmentId ?? existing.department_id,
+        location_id: d.locationId ?? existing.location_id,
+        subsidiary_id: d.subsidiaryId ?? existing.subsidiary_id,
+        updated_at: new Date(),
+      });
+
+      // Replace lines
+      await trx('bank_deposit_lines').where({ deposit_id: depositId }).delete();
+      if (lines.length > 0) {
+        await trx('bank_deposit_lines').insert(lines.map((l: any, i: number) => ({
+          deposit_id: depositId,
+          line_number: i + 1,
+          account_id: l.accountId || null,
+          memo: l.memo || null,
+          amount: Number(l.amount || 0),
+          department_id: l.department || l.departmentId || null,
+          location_id: l.location || l.locationId || null,
+          entity_customer_id: l.entityCustomerId || null,
+          entity_vendor_id: l.entityVendorId || null,
+          entity_employee_id: l.entityEmployeeId || null,
+        })));
+      }
+
+      // Re-post GL: reuse the existing journal entry, replace its lines.
+      try {
+        let je = await trx('journal_entries').where({ source_type: 'bank_deposit', source_id: depositId }).first();
+        if (je) {
+          await trx('journal_entries').where({ id: je.id }).update({
+            entry_date: d.depositDate || existing.deposit_date,
+            memo: `Bank Deposit ${depositNumber}`,
+            department_id: d.departmentId ?? existing.department_id,
+            location_id: d.locationId ?? existing.location_id,
+            subsidiary_id: d.subsidiaryId ?? existing.subsidiary_id,
+            total_debit: totalAmount, total_credit: totalAmount,
+            updated_at: new Date(),
+          });
+          await trx('journal_entry_lines').where({ journal_id: je.id }).delete();
+        } else {
+          [je] = await trx('journal_entries').insert({
+            company_id: companyId, subsidiary_id: d.subsidiaryId || null,
+            journal_number: `JE-DEP-${depositNumber}`, entry_date: d.depositDate || existing.deposit_date,
+            memo: `Bank Deposit ${depositNumber}`, source_type: 'bank_deposit', source_id: depositId,
+            status: 'posted', total_debit: totalAmount, total_credit: totalAmount,
+            posted_by: req.user!.id, posted_at: new Date(), created_by: req.user!.id,
+          }).returning('*');
+        }
+        const jeLines: any[] = [
+          { journal_id: je.id, line_number: 1, account_id: d.bankAccountId, debit: totalAmount, credit: 0, debit_base: totalAmount, credit_base: 0, department_id: d.departmentId || null, location_id: d.locationId || null, memo: `Deposit ${depositNumber}` },
+          ...lines.map((l: any, i: number) => ({
+            journal_id: je.id, line_number: i + 2,
+            account_id: l.accountId || null, debit: 0, credit: Number(l.amount || 0),
+            debit_base: 0, credit_base: Number(l.amount || 0),
+            department_id: l.department || l.departmentId || null,
+            location_id: l.location || l.locationId || null,
+            entity_customer_id: l.entityCustomerId || null,
+            entity_vendor_id: l.entityVendorId || null,
+            memo: l.memo || null,
+          })),
+        ];
+        await trx('journal_entry_lines').insert(jeLines);
+      } catch (glErr: any) { console.error('[GL WARNING] Deposit update GL skipped:', glErr.message); }
+    });
+
+    const updated = await db('bank_deposits').where({ id: depositId }).first();
+    res.json({ success: true, data: { ...updated, deposit_number: depositNumber } });
+  } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: 'Failed to update deposit' }); }
 });
 
 // ─── Transfer Funds ───────────────────────────────────────────────────────────
@@ -549,7 +675,7 @@ router.post('/transfers', async (req: Request, res: Response): Promise<void> => 
     if (d.fromAccountId === d.toAccountId) { res.status(400).json({ success: false, error: 'From and To must be different' }); return; }
     if (!d.amount || Number(d.amount) <= 0) { res.status(400).json({ success: false, error: 'Amount must be greater than 0' }); return; }
 
-    const transferNumber = `TRF-${Date.now()}`;
+    const transferNumber = await resolveTransactionNumber(companyId, 'bank_transfer', d.documentNumber);
 
     const [transfer] = await db('bank_transfers').insert({
       company_id: companyId,
@@ -608,15 +734,28 @@ router.get('/deposits/:id', async (req: Request, res: Response): Promise<void> =
         'd.name as department_name', 'l.name as location_name', 's.name as subsidiary_name')
       .first();
     if (!deposit) { res.status(404).json({ success: false, error: 'Deposit not found' }); return; }
-    // lines (if table exists)
+    // lines (if table exists) — enrich with the entity (customer/vendor/employee) label.
     let lines: any[] = [];
     try {
+      await ensureDepositLineColumns();
       lines = await db('bank_deposit_lines as bdl')
         .leftJoin('accounts as a', 'bdl.account_id', 'a.id')
         .leftJoin('departments as d', 'bdl.department_id', 'd.id')
         .leftJoin('locations as l', 'bdl.location_id', 'l.id')
+        .leftJoin('customers as c', 'bdl.entity_customer_id', 'c.id')
+        .leftJoin('vendors as v', 'bdl.entity_vendor_id', 'v.id')
+        .leftJoin('users as u', 'bdl.entity_employee_id', 'u.id')
         .where({ 'bdl.deposit_id': deposit.id })
-        .select('bdl.*', 'a.name as account_name', 'a.code as account_code', 'd.name as department_name', 'l.name as location_name');
+        .orderBy('bdl.line_number')
+        .select('bdl.*', 'a.name as account_name', 'a.code as account_code', 'd.name as department_name', 'l.name as location_name',
+          'c.name as customer_name', 'v.name as vendor_name', 'u.name as employee_name');
+      lines = lines.map((l: any) => {
+        let entityType: string | null = null, entityName: string | null = null;
+        if (l.entity_customer_id) { entityType = 'customer'; entityName = l.customer_name; }
+        else if (l.entity_vendor_id) { entityType = 'vendor'; entityName = l.vendor_name; }
+        else if (l.entity_employee_id) { entityType = 'employee'; entityName = l.employee_name; }
+        return { ...l, entity_type: entityType, entity_name: entityName };
+      });
     } catch (_) { lines = []; }
     const journalEntries = await db('journal_entries').where({ source_type: 'bank_deposit', source_id: deposit.id }).first();
     res.json({ success: true, data: { ...deposit, lines, journalEntry: journalEntries || null } });

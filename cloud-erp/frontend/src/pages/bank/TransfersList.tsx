@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import api from '../../services/api';
 import { Loader2, ChevronLeft, ChevronRight, Download, Printer, FileText, ArrowRight } from 'lucide-react';
+import { usePermissions } from '../../hooks/usePermissions';
 
 interface Transfer {
   id: string;
@@ -21,6 +22,7 @@ const SORT_OPTIONS   = ['Recently Created', 'Date', 'Amount', 'Transfer #'];
 
 export default function TransfersList() {
   const navigate = useNavigate();
+  const { canView, canCreate } = usePermissions();
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [filtered, setFiltered] = useState<Transfer[]>([]);
   const [loading,  setLoading]  = useState(true);
@@ -77,6 +79,16 @@ export default function TransfersList() {
   const totalPages = Math.ceil(filtered.length / PER_PAGE);
   const paginated  = filtered.slice((page-1)*PER_PAGE, page*PER_PAGE);
 
+  if (!canView('transfer_order')) return (
+    <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+      <div className="bg-white border border-slate-200 rounded shadow-sm p-8 max-w-md text-center">
+        <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center mx-auto mb-4"><FileText className="text-red-400" size={24}/></div>
+        <h2 className="text-lg font-semibold text-slate-800 mb-1">Akses Ditolak</h2>
+        <p className="text-sm text-slate-500">Anda tidak memiliki izin untuk melihat Transfer Funds.</p>
+      </div>
+    </div>
+  );
+
   if (loading) return (
     <div className="flex items-center justify-center h-64">
       <Loader2 className="animate-spin text-blue-500" size={32}/>
@@ -100,10 +112,12 @@ export default function TransfersList() {
           </div>
         </div>
         <div className="max-w-screen-xl mx-auto px-8 py-2 flex items-center gap-2">
+          {canCreate('transfer_order') && (
           <button onClick={() => navigate('/bank/transfer-funds')}
             className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-700 text-white text-sm font-medium rounded hover:bg-blue-800 transition-colors">
             New Transaction
           </button>
+          )}
         </div>
       </div>
 

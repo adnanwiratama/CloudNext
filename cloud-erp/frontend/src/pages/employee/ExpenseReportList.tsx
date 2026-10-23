@@ -18,6 +18,7 @@ export default function ExpenseReportList() {
   return (
     <TransactionListPage
       title="Expense Reports"
+      permissionKey="expense_report"
       iconBg="bg-purple-600"
       iconText="ER"
       endpoint="/api/employee/expenses"

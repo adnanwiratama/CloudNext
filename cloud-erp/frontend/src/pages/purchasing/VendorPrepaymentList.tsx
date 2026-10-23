@@ -5,6 +5,7 @@ export default function VendorPrepaymentList() {
   return (
     <TransactionListPage
       title="Vendor Prepayments"
+      permissionKey="bill_payment"
       iconBg="bg-violet-600" iconText="$"
       endpoint="/api/purchasing/prepayments"
       newPath="/purchasing/prepayments/new"

@@ -33,6 +33,32 @@ api.interceptors.response.use(
   }
 );
 
+// Fetch a file (download/preview) as a blob through the authenticated axios
+// instance. Plain <a href> links can't carry the Bearer token, so file endpoints
+// (which require auth) 401; this sends the token and returns a blob URL.
+export async function fetchFileBlobUrl(path: string): Promise<string> {
+  const res = await api.get(path, { responseType: 'blob' });
+  const type = (res.headers['content-type'] as string) || 'application/octet-stream';
+  return URL.createObjectURL(new Blob([res.data], { type }));
+}
+
+// Download a file by id with its original filename.
+export async function downloadFile(id: string, filename?: string): Promise<void> {
+  const url = await fetchFileBlobUrl(`/api/files/${id}/download`);
+  const a = document.createElement('a');
+  a.href = url;
+  if (filename) a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+// Open a file inline (preview) in a new tab.
+export async function previewFile(id: string): Promise<void> {
+  const url = await fetchFileBlobUrl(`/api/files/${id}/preview`);
+  window.open(url, '_blank');
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
 // Generic API helpers
 export const apiGet = <T>(url: string, params?: any) =>
   api.get<{ success: boolean; data: T }>(url, { params }).then(r => r.data.data);

@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import db from '../../config/database';
 import { authenticate } from '../../middleware/auth';
+import { enforcePermissions } from '../../middleware/permissions';
 import { getPaginationParams, buildPaginatedResult } from '../../utils/pagination';
 import { createAuditLog } from '../../utils/audit';
 import { generateTransactionNumber } from '../../utils/sequence';
@@ -8,6 +9,37 @@ import { AppError } from '../../middleware/errorHandler';
 
 const router = Router();
 router.use(authenticate);
+router.use(enforcePermissions);
+
+// Ensure the customers table has the columns the form/handler use. The live DB
+// drifted from the code (missing company_name/mobile/website/billing_*/shipping_*
+// /credit_limit/price_level/territory/notes), so add anything missing at runtime.
+let _customerColsEnsured = false;
+async function ensureCustomerColumns(): Promise<void> {
+  if (_customerColsEnsured) return;
+  const add = async (col: string, build: (t: any) => void) => {
+    if (!(await db.schema.hasColumn('customers', col))) await db.schema.alterTable('customers', build);
+  };
+  await add('company_name',     (t: any) => t.string('company_name', 200).nullable());
+  await add('mobile',           (t: any) => t.string('mobile', 50).nullable());
+  await add('website',          (t: any) => t.string('website', 200).nullable());
+  await add('billing_address',  (t: any) => t.text('billing_address').nullable());
+  await add('billing_city',     (t: any) => t.string('billing_city', 100).nullable());
+  await add('billing_state',    (t: any) => t.string('billing_state', 100).nullable());
+  await add('billing_country',  (t: any) => t.string('billing_country', 100).nullable());
+  await add('billing_postal',   (t: any) => t.string('billing_postal', 30).nullable());
+  await add('shipping_address', (t: any) => t.text('shipping_address').nullable());
+  await add('shipping_city',    (t: any) => t.string('shipping_city', 100).nullable());
+  await add('shipping_state',   (t: any) => t.string('shipping_state', 100).nullable());
+  await add('shipping_country', (t: any) => t.string('shipping_country', 100).nullable());
+  await add('shipping_postal',  (t: any) => t.string('shipping_postal', 30).nullable());
+  await add('credit_limit',     (t: any) => t.decimal('credit_limit', 20, 2).defaultTo(0));
+  await add('price_level',      (t: any) => t.string('price_level', 50).nullable());
+  await add('territory',        (t: any) => t.string('territory', 100).nullable());
+  await add('notes',            (t: any) => t.text('notes').nullable());
+  await add('updated_by',       (t: any) => t.uuid('updated_by').nullable());
+  _customerColsEnsured = true;
+}
 
 // GET /api/customers
 router.get('/', async (req: Request, res: Response): Promise<void> => {
@@ -64,7 +96,9 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const contacts = await db('customer_contacts').where({ customer_id: customer.id });
+    const contacts = (await db.schema.hasTable('customer_contacts'))
+      ? await db('customer_contacts').where({ customer_id: customer.id }).catch(() => [])
+      : [];
 
     // Summary stats
     const invoiceStats = await db('invoices')
@@ -86,6 +120,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 // POST /api/customers
 router.post('/', async (req: Request, res: Response): Promise<void> => {
   try {
+    await ensureCustomerColumns();
     const companyId = req.user!.companyId;
     const data = req.body;
 
@@ -94,7 +129,16 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const customerNumber = await generateTransactionNumber(companyId, 'customer', db);
+    // Use the configured sequence if one exists; otherwise fall back to a computed
+    // C-000001 style number (not every company has a 'customer' sequence seeded).
+    let customerNumber: string;
+    try {
+      customerNumber = await generateTransactionNumber(companyId, 'customer', db);
+    } catch {
+      const last = await db('customers').where({ company_id: companyId }).orderBy('created_at', 'desc').first();
+      const n = last && /\d+/.test(String(last.customer_number)) ? parseInt(String(last.customer_number).replace(/\D/g, '')) : 0;
+      customerNumber = `C-${String(n + 1).padStart(6, '0')}`;
+    }
 
     const [customer] = await db('customers').insert({
       company_id: companyId,
@@ -147,6 +191,7 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
 // PUT /api/customers/:id
 router.put('/:id', async (req: Request, res: Response): Promise<void> => {
   try {
+    await ensureCustomerColumns();
     const companyId = req.user!.companyId;
     const existing = await db('customers').where({ id: req.params.id, company_id: companyId, is_deleted: false }).first();
     if (!existing) {
@@ -166,7 +211,9 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
       tax_id: data.taxId ?? existing.tax_id,
       billing_address: data.billingAddress ?? existing.billing_address,
       billing_city: data.billingCity ?? existing.billing_city,
+      billing_state: data.billingState ?? existing.billing_state,
       billing_country: data.billingCountry ?? existing.billing_country,
+      billing_postal: data.billingPostal ?? existing.billing_postal,
       shipping_address: data.shippingAddress ?? existing.shipping_address,
       currency: data.currency ?? existing.currency,
       payment_terms: data.paymentTerms ?? existing.payment_terms,

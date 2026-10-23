@@ -29,9 +29,32 @@ interface CreateInventoryTxnParams {
   lines: InventoryMovement[];
   createdBy: string;
   trx: any;
+  // Skip the stock-sufficiency guard. Used by system reversals (e.g. deleting a
+  // receipt) where we only reduce physical on-hand and committed reservations
+  // must not block the reversal.
+  skipStockCheck?: boolean;
 }
 
 export class InventoryEngine {
+  /**
+   * Resolve the conversion rate (units of BASE per 1 of this unit) for a uom_id.
+   * Base unit has rate 1. Returns 1 when no uom is given or not found.
+   */
+  static async baseRate(trx: any, uomId?: string | null): Promise<number> {
+    if (!uomId) return 1;
+    const u = await trx('units_of_measure').where({ id: uomId }).first();
+    const rate = Number(u?.conversion_rate_to_base || 1);
+    return rate > 0 ? rate : 1;
+  }
+
+  /**
+   * Convert a quantity expressed in `uomId` into the item's BASE stock unit.
+   */
+  static async toBaseQty(trx: any, uomId: string | null | undefined, quantity: number): Promise<number> {
+    const rate = await InventoryEngine.baseRate(trx, uomId);
+    return Number(quantity || 0) * rate;
+  }
+
   /**
    * Core method: create inventory transaction and update balances.
    * All inventory movements must flow through this method.
@@ -40,11 +63,11 @@ export class InventoryEngine {
     const {
       companyId, transactionType, referenceType, referenceId,
       transactionDate, locationId, warehouseId, toLocationId, toWarehouseId,
-      memo, lines, createdBy, trx,
+      memo, lines, createdBy, trx, skipStockCheck,
     } = params;
 
-    // Validate sufficient stock for outgoing transactions
-    for (const line of lines.filter(l => l.direction === 'out')) {
+    // Validate sufficient stock for outgoing transactions (skipped for system reversals)
+    for (const line of (skipStockCheck ? [] : lines.filter(l => l.direction === 'out'))) {
       const balance = await InventoryEngine.getBalance(
         trx, companyId, line.itemId, line.locationId || locationId, line.warehouseId || warehouseId
       );
@@ -58,7 +81,15 @@ export class InventoryEngine {
       }
     }
 
-    const txnNumber = await generateTransactionNumber(companyId, transactionType, trx);
+    // Not every transaction type has a configured sequence (e.g. system reversals
+    // like receipt_delete_reverse). Fall back to a generated number so the inventory
+    // movement still posts instead of silently failing and leaving stock unreversed.
+    let txnNumber: string;
+    try {
+      txnNumber = await generateTransactionNumber(companyId, transactionType, trx);
+    } catch {
+      txnNumber = `${String(transactionType).toUpperCase().slice(0, 12)}-${Date.now()}`;
+    }
 
     const [txn] = await trx('inventory_transactions').insert({
       company_id: companyId,
@@ -73,7 +104,8 @@ export class InventoryEngine {
       to_warehouse_id: toWarehouseId,
       status: 'completed',
       memo,
-      created_by: createdBy,
+      // created_by is a UUID column; coerce empty string (passed by system reversals) to null.
+      created_by: createdBy || null,
     }).returning('*');
 
     const lineInserts = lines.map(line => ({
@@ -159,15 +191,12 @@ export class InventoryEngine {
     unitCost?: number
   ): Promise<void> {
     const existing = await trx('inventory_balances')
-      .where({
-        company_id: companyId,
-        item_id: itemId,
-        location_id: locationId || null,
-        warehouse_id: warehouseId || null,
-        bin_id: binId || null,
-        lot_number: lotNumber || '',
-        serial_number: serialNumber || '',
-      })
+      .where({ company_id: companyId, item_id: itemId })
+      .whereRaw('COALESCE(location_id::text, \'\') = ?', [locationId || ''])
+      .whereRaw('COALESCE(warehouse_id::text, \'\') = ?', [warehouseId || ''])
+      .whereRaw('COALESCE(bin_id::text, \'\') = ?', [binId || ''])
+      .whereRaw('COALESCE(lot_number, \'\') = ?', [lotNumber || ''])
+      .whereRaw('COALESCE(serial_number, \'\') = ?', [serialNumber || ''])
       .first();
 
     const qty = direction === 'in' ? quantity : -quantity;
@@ -221,9 +250,19 @@ export class InventoryEngine {
     locationId?: string,
     warehouseId?: string
   ): Promise<void> {
-    await trx('inventory_balances')
+    const updated = await trx('inventory_balances')
       .where({ company_id: companyId, item_id: itemId, location_id: locationId || null, warehouse_id: warehouseId || null })
       .increment('qty_committed', quantity);
+    // No existing balance row for this item+location: create one so the reservation is recorded
+    if (!updated) {
+      await trx('inventory_balances').insert({
+        company_id: companyId, item_id: itemId,
+        location_id: locationId || null, warehouse_id: warehouseId || null,
+        lot_number: '', serial_number: '',
+        qty_on_hand: 0, qty_committed: quantity, qty_on_order: 0, qty_in_transit: 0, qty_wip: 0,
+        avg_cost: 0, last_updated: new Date(),
+      });
+    }
   }
 
   /**
@@ -254,7 +293,8 @@ export class InventoryEngine {
         db.raw('COALESCE(SUM(qty_on_order), 0) as qty_on_order'),
         db.raw('COALESCE(SUM(qty_in_transit), 0) as qty_in_transit'),
         db.raw('COALESCE(SUM(qty_wip), 0) as qty_wip'),
-        db.raw('AVG(avg_cost) as avg_cost')
+        // Header average cost = average of the per-location average costs (locations holding stock only)
+        db.raw('COALESCE(AVG(avg_cost) FILTER (WHERE qty_on_hand > 0), AVG(avg_cost)) as avg_cost')
       )
       .first();
 

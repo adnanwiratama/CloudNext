@@ -5,6 +5,7 @@ export default function CustomerDepositList() {
   return (
     <TransactionListPage
       title="Customer Deposits"
+      permissionKey="deposit"
       iconBg="bg-emerald-600" iconText="$"
       endpoint="/api/sales/deposits"
       newPath="/sales/deposits/new"

@@ -60,6 +60,7 @@ export const STATUS_COLORS: Record<string, string> = {
   partially_fulfilled: 'badge-orange',
   pending_billing: 'badge-blue',
   partially_billed: 'badge-orange',
+  fully_billed: 'badge-green',
   billed: 'badge-green',
   open: 'badge-blue',
   partially_paid: 'badge-orange',
@@ -90,4 +91,19 @@ export function getStatusBadgeClass(status: string): string {
 
 export function formatStatus(status: string): string {
   return status?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || '-';
+}
+
+// Compute a due date from an order/base date and a payment term string.
+// Terms like "Net30" / "net 30" add that many days. "COD"/"CIA"/"Immediate" = same day.
+export function computeDueDate(baseDate: string | Date | null | undefined, paymentTerms: string | null | undefined): string {
+  if (!baseDate) return '';
+  const d = typeof baseDate === 'string' ? new Date(baseDate) : new Date(baseDate);
+  if (isNaN(d.getTime())) return '';
+  const term = String(paymentTerms || '').toLowerCase().replace(/\s+/g, '');
+  let days = 0;
+  const m = term.match(/(\d+)/); // pull the number out of net30, net 30, 30, etc.
+  if (m) days = parseInt(m[1], 10) || 0;
+  // COD / CIA / immediate → due same day (0 days)
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
 }

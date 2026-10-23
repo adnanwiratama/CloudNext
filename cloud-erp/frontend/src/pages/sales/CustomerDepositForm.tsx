@@ -1,15 +1,18 @@
-import { useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams, useParams } from 'react-router-dom';
 import { ChevronUp, ChevronDown, Loader2, Wallet } from 'lucide-react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
 import { useFormOptions } from '../../hooks/useFormOptions';
+import NumberInput from '../../components/common/NumberInput';
 import TransactionFileUploadRow, { FileRow, uploadFileRows } from '../../components/transaction/TransactionFileUploadRow';
 import toast from 'react-hot-toast';
 
 export default function CustomerDepositForm() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { id } = useParams<{ id: string }>();
+  const isEdit = !!id && id !== 'new';
   const { customers, accounts, locations, departments } = useFormOptions();
   const bankAccounts = accounts.filter((a: any) => a.is_bank || ['1010','1020','1025'].includes(a.code));
 
@@ -36,13 +39,41 @@ export default function CustomerDepositForm() {
   });
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
 
+  // EDIT MODE: load the existing deposit
+  const { data: existingDeposit } = useQuery({
+    queryKey: ['customer-deposit-edit', id],
+    queryFn: () => api.get(`/api/sales/deposits/${id}`).then(r => r.data.data),
+    enabled: isEdit,
+  });
+  const [depositLoaded, setDepositLoaded] = useState(false);
+  useEffect(() => {
+    if (!isEdit || !existingDeposit || depositLoaded) return;
+    setForm(f => ({
+      ...f,
+      customerId: existingDeposit.customer_id || '',
+      depositDate: existingDeposit.deposit_date?.split('T')[0] || f.depositDate,
+      amount: parseFloat(existingDeposit.amount) || 0,
+      bankAccountId: existingDeposit.bank_account_id || '',
+      paymentMethod: existingDeposit.payment_method || f.paymentMethod,
+      reference: existingDeposit.reference || '',
+      salesOrderId: existingDeposit.sales_order_id || '',
+      memo: existingDeposit.memo || '',
+      departmentId: existingDeposit.department_id || '',
+      locationId: existingDeposit.location_id || '',
+      subsidiaryId: existingDeposit.subsidiary_id || '',
+    }));
+    setDepositLoaded(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existingDeposit, isEdit, depositLoaded]);
+
   const mutation = useMutation({
-    mutationFn: (data: any) => api.post('/api/sales/deposits', data),
+    mutationFn: (data: any) => isEdit ? api.put(`/api/sales/deposits/${id}`, data) : api.post('/api/sales/deposits', data),
     onSuccess: async (res) => {
-      const savedId = res.data?.data?.id;
+      const savedId = res.data?.data?.id || id;
       try { if (savedId) await uploadFileRows(fileRows, 'customer_deposit', String(savedId), api.post.bind(api)); } catch (_) {}
-      toast.success('Customer deposit recorded');
-      navigate('/sales/deposits');
+      toast.success(isEdit ? 'Customer deposit updated' : 'Customer deposit recorded');
+      if (savedId) navigate(`/sales/deposits/${savedId}`, { state: { justSaved: true } });
+      else navigate('/sales/deposits');
     },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to record deposit'),
   });
@@ -70,7 +101,7 @@ export default function CustomerDepositForm() {
           <div className="max-w-screen-xl mx-auto px-4 py-2 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded bg-emerald-600 flex items-center justify-center text-white"><Wallet size={15}/></div>
-              <span className="text-xl font-bold text-slate-800">Customer Deposit</span>
+              <span className="text-xl font-bold text-slate-800">{isEdit ? 'Edit Customer Deposit' : 'Customer Deposit'}</span>
             </div>
             <div className="flex items-center gap-5 text-sm text-blue-600">
               <button onClick={() => navigate('/sales/deposits')} className="hover:underline">List</button>
@@ -117,7 +148,7 @@ export default function CustomerDepositForm() {
                   </div>
                   <div className="space-y-3">
                     <div><label className="block text-xs text-slate-500 mb-1">Amount <span className="text-red-500">*</span></label>
-                      <input type="number" min="0" step="0.01" value={form.amount} onChange={e=>set('amount',parseFloat(e.target.value)||0)} className={dis + ' text-right'} placeholder="0"/></div>
+                      <NumberInput value={form.amount} min={0} onChange={v=>set('amount',v)} className={dis + ' text-right'}/></div>
                     <div><label className="block text-xs text-slate-500 mb-1">Deposit To (Bank/Cash) <span className="text-red-500">*</span></label>
                       <select value={form.bankAccountId} onChange={e=>set('bankAccountId',e.target.value)} className={dis} required>
                         <option value="">-- Select Account --</option>

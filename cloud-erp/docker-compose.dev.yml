@@ -5,6 +5,28 @@ networks:
     driver: bridge
 
 services:
+  # Sandbox Postgres instance (separate from production cloud-erp-db).
+  # Used by Option C: a refreshable copy of production for testing/training.
+  db-sandbox:
+    image: postgres:15-alpine
+    container_name: cloud-erp-db-sandbox
+    restart: unless-stopped
+    networks:
+      - erp-network
+    environment:
+      POSTGRES_DB: cloud_erp
+      POSTGRES_USER: erp_user
+      POSTGRES_PASSWORD: erp_secure_password
+    volumes:
+      - sandbox_postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U erp_user -d cloud_erp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
     image: node:20-alpine
     container_name: cloud-erp-backend
@@ -22,6 +44,13 @@ services:
       DB_NAME: cloud_erp
       DB_USER: erp_user
       DB_PASSWORD: erp_secure_password
+      # Sandbox DB connection (separate instance). SANDBOX_ENABLED gates Option C.
+      SANDBOX_ENABLED: "true"
+      DB_SANDBOX_HOST: cloud-erp-db-sandbox
+      DB_SANDBOX_PORT: 5432
+      DB_SANDBOX_NAME: cloud_erp
+      DB_SANDBOX_USER: erp_user
+      DB_SANDBOX_PASSWORD: erp_secure_password
       JWT_SECRET: cloud-erp-super-secret-jwt-key-2026-change-in-production
       JWT_EXPIRES_IN: 8h
       CORS_ORIGINS: http://localhost:5173,http://localhost:4173
@@ -54,3 +83,4 @@ services:
 volumes:
   backend_node_modules:
   frontend_node_modules:
+  sandbox_postgres_data:

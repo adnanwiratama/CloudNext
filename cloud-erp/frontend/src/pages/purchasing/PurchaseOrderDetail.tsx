@@ -1,14 +1,17 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronUp, ChevronDown, CheckCircle, Package, FileText, Loader2, CheckCircle2, ShoppingCart } from 'lucide-react';
+import { ChevronUp, ChevronDown, CheckCircle, Package, FileText, Loader2, CheckCircle2, ShoppingCart, Lock, Unlock, Printer } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
-import { formatCurrency, formatDate, formatNumber } from '../../utils/format';
+import { formatCurrency, formatDate, formatNumber, formatStatus } from '../../utils/format';
 import { StatusBadge } from '../../components/common/DataTable';
 import toast from 'react-hot-toast';
 import TransactionLink from '../../components/common/TransactionLink';
 import TransactionFilesTab from '../../components/transaction/TransactionFilesTab';
 import TransactionSysInfoTab from '../../components/transaction/TransactionSysInfoTab';
+import { usePrintDocument } from '../../hooks/usePrintDocument';
+import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
+import EditTransactionButton from '../../components/transaction/EditTransactionButton';
 
 export default function PurchaseOrderDetail() {
   const { id } = useParams<{ id: string }>();
@@ -19,7 +22,7 @@ export default function PurchaseOrderDetail() {
 
   const [primaryOpen, setPrimaryOpen] = useState(true);
   const [classOpen, setClassOpen] = useState(true);
-  const [activeTab, setActiveTab] = useState<'items'|'files'|'gl'|'sysinfo'>('items');
+  const [activeTab, setActiveTab] = useState<'items'|'related'|'files'|'gl'|'sysinfo'>('items');
 
   useEffect(() => { if (justSaved && id) qc.invalidateQueries({ queryKey: ['purchase-order', id] }); }, [justSaved, id, qc]);
 
@@ -39,18 +42,61 @@ export default function PurchaseOrderDetail() {
     onSuccess: () => { toast.success('PO rejected'); qc.invalidateQueries({ queryKey: ['purchase-order', id] }); },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed'),
   });
-  const billMutation = useMutation({
-    mutationFn: () => api.post(`/api/purchasing/orders/${id}/bill`, { billDate: new Date().toISOString().split('T')[0] }),
-    onSuccess: () => { toast.success('Vendor bill created'); qc.invalidateQueries({ queryKey: ['purchase-order', id] }); navigate('/purchasing/bills'); },
+  const closeMutation = useMutation({
+    mutationFn: () => api.post(`/api/purchasing/orders/${id}/close`),
+    onSuccess: () => { toast.success('PO closed'); qc.invalidateQueries({ queryKey: ['purchase-order', id] }); },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed'),
   });
+  const reopenMutation = useMutation({
+    mutationFn: () => api.post(`/api/purchasing/orders/${id}/reopen`),
+    onSuccess: () => { toast.success('PO reopened'); qc.invalidateQueries({ queryKey: ['purchase-order', id] }); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed'),
+  });
+  const { print } = usePrintDocument();
+  const handlePrint = () => {
+    if (!po) return;
+    print({
+      title: 'Purchase Order',
+      number: po.po_number,
+      status: formatStatus(po.status),
+      partyLabel: 'Vendor',
+      partyName: po.vendor_name,
+      partyLines: [po.vendor_address, po.vendor_email].filter(Boolean),
+      meta: [
+        { label: 'Order Date', value: formatDate(po.order_date) },
+        { label: 'Expected Receipt', value: po.expected_receipt_date ? formatDate(po.expected_receipt_date) : '-' },
+        { label: 'Payment Terms', value: po.payment_terms || '-' },
+        { label: 'Currency', value: po.currency || '-' },
+      ],
+      columns: [
+        { label: 'Item', value: (r: any) => `${r.item_code || ''} ${r.item_name || ''}`.trim() },
+        { label: 'Description', value: (r: any) => r.description || '' },
+        { label: 'Qty', align: 'right', value: (r: any) => formatNumber(r.quantity, 2) },
+        { label: 'Unit', value: (r: any) => r.uom_code || '' },
+        { label: 'Unit Price', align: 'right', value: (r: any) => formatCurrency(r.unit_price) },
+        { label: 'Disc', align: 'right', value: (r: any) => (Number(r.discount_amount) > 0 ? formatCurrency(r.discount_amount) : '-') },
+        { label: 'Tax', align: 'right', value: (r: any) => (Number(r.tax_amount) > 0 ? formatCurrency(r.tax_amount) : '-') },
+        { label: 'Amount', align: 'right', value: (r: any) => formatCurrency(r.amount) },
+      ],
+      rows: po.lines || [],
+      totals: [
+        { label: 'Subtotal', value: formatCurrency(po.subtotal) },
+        { label: 'Discount', value: formatCurrency(po.discount_amount) },
+        { label: 'Tax', value: formatCurrency(po.tax_amount) },
+        { label: 'Total', value: formatCurrency(po.total_amount), bold: true },
+      ],
+      memo: po.memo,
+    });
+  };
 
   if (isLoading) return <div className="flex items-center justify-center h-64"><Loader2 className="animate-spin text-blue-500" size={32}/></div>;
   if (!po) return <div className="p-6 text-red-600">Purchase order not found.</div>;
 
+  const isClosed = po.status === 'closed';
   const canApprove = po.status === 'pending_approval';
-  const canReceive = ['approved','pending_receipt','partially_received'].includes(po.status);
-  const canBill = po.receipts?.length > 0 && !['pending_approval','cancelled'].includes(po.status);
+  const canReceive = !isClosed && ['approved','pending_receipt','partially_received'].includes(po.status);
+  const canBill = !isClosed && po.receipts?.length > 0 && !['pending_approval','cancelled','fully_billed'].includes(po.status);
+  const canClose = !isClosed && !['pending_approval','cancelled'].includes(po.status);
   const dis = 'w-full border border-slate-200 rounded text-sm px-2 py-1.5 bg-slate-50 text-slate-700 cursor-default';
 
   return (
@@ -72,11 +118,15 @@ export default function PurchaseOrderDetail() {
         </div>
         <div className="max-w-screen-xl mx-auto px-4 py-2 flex items-center gap-2 flex-wrap">
           <button onClick={() => navigate('/purchasing/orders')} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Back</button>
-          <button onClick={() => navigate(`/purchasing/orders/${id}/edit`)} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Edit</button>
+          <EditTransactionButton permKey="purchase_order" to={`/purchasing/orders/${id}/edit`} />
+          <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
           {canApprove && <button onClick={() => approveMutation.mutate()} disabled={approveMutation.isPending} className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-sm rounded hover:bg-green-700 disabled:opacity-60"><CheckCircle size={13}/> Approve</button>}
           {canApprove && <button onClick={() => { if (confirm('Reject?')) rejectMutation.mutate(); }} disabled={rejectMutation.isPending} className="px-3 py-1.5 bg-red-600 text-white text-sm rounded hover:bg-red-700 disabled:opacity-60">Reject</button>}
           {canReceive && <button onClick={() => navigate(`/purchasing/receipts/new?poId=${id}`)} className="flex items-center gap-1 px-3 py-1.5 bg-blue-700 text-white text-sm rounded hover:bg-blue-800"><Package size={13}/> Good Receipt</button>}
-          {canBill && <button onClick={() => billMutation.mutate()} disabled={billMutation.isPending} className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 disabled:opacity-60">{billMutation.isPending?<Loader2 size={12} className="animate-spin"/>:<FileText size={13}/>} Create Bill</button>}
+          {canBill && <button onClick={() => navigate(`/purchasing/bills/new?poId=${id}`)} className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700"><FileText size={13}/> Create Bill</button>}
+          {canClose && <button onClick={() => { if (confirm('Close this PO? Item Receipt and Create Bill will no longer be available until it is reopened.')) closeMutation.mutate(); }} disabled={closeMutation.isPending} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50 disabled:opacity-60"><Lock size={13}/> Closed</button>}
+          {isClosed && <button onClick={() => reopenMutation.mutate()} disabled={reopenMutation.isPending} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50 disabled:opacity-60"><Unlock size={13}/> Reopen</button>}
+          <DeleteTransactionButton type="purchase_order" id={id!} listPath="/purchasing/orders" label={po.po_number} />
         </div>
       </div>
 
@@ -105,14 +155,21 @@ export default function PurchaseOrderDetail() {
                 <div className="space-y-3">
                   <div><label className="block text-xs text-slate-500 mb-1">Currency</label><input readOnly value={po.currency||''} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Payment Terms</label><input readOnly value={po.payment_terms||''} className={dis}/></div>
-                  <div><label className="block text-xs text-slate-500 mb-1">Location</label><input readOnly value={po.location_name||''} className={dis}/></div>
-                  <div><label className="block text-xs text-slate-500 mb-1">Department</label><input readOnly value={po.department_name||''} className={dis}/></div>
-                </div>
-                <div className="space-y-3">
                   <div><label className="block text-xs text-slate-500 mb-1">Status</label><input readOnly value={po.status?.replace(/_/g,' ')||''} className={dis}/></div>
-                  <div><label className="block text-xs text-slate-500 mb-1">Total</label><input readOnly value={Number(po.total_amount||0).toLocaleString('id-ID',{minimumFractionDigits:2})} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Approved By</label><input readOnly value={po.approved_by_name||''} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Memo</label><input readOnly value={po.memo||''} className={dis}/></div>
+                </div>
+                <div className="space-y-3">
+                  {/* Summary box */}
+                  <div className="border border-slate-200 rounded overflow-hidden">
+                    <div className="bg-slate-600 text-white text-xs font-semibold px-3 py-1.5">Summary</div>
+                    <div className="text-sm">
+                      <div className="flex justify-between px-3 py-1.5 border-b border-slate-100"><span className="text-slate-600">Subtotal</span><span>{Number(po.subtotal||0).toLocaleString('id-ID',{minimumFractionDigits:2})}</span></div>
+                      <div className="flex justify-between px-3 py-1.5 border-b border-slate-100"><span className="text-slate-600">Discount</span><span className="text-amber-600">{Number(po.discount_amount||0).toLocaleString('id-ID',{minimumFractionDigits:2})}</span></div>
+                      <div className="flex justify-between px-3 py-1.5 border-b border-slate-100"><span className="text-slate-600">Tax</span><span>{Number(po.tax_amount||0).toLocaleString('id-ID',{minimumFractionDigits:2})}</span></div>
+                      <div className="flex justify-between px-3 py-1.5 font-bold bg-slate-50"><span>Total</span><span>{Number(po.total_amount||0).toLocaleString('id-ID',{minimumFractionDigits:2})}</span></div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -138,10 +195,10 @@ export default function PurchaseOrderDetail() {
         {/* Tabs */}
         <div className="bg-white border border-slate-200 rounded shadow-sm">
           <div className="border-b border-slate-200 px-4 flex">
-            {(['items','files','gl','sysinfo'] as const).map(tab=>(
+            {(['items','related','files','gl','sysinfo'] as const).map(tab=>(
               <button key={tab} onClick={()=>setActiveTab(tab)}
                 className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${activeTab===tab?'border-blue-600 text-blue-700':'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                {tab==='items'?'Items':tab==='files'?'Files':tab==='gl'?'GL Impact':'System Information'}
+                {tab==='items'?'Items':tab==='related'?'Related Records':tab==='files'?'Files':tab==='gl'?'GL Impact':'System Information'}
               </button>
             ))}
           </div>
@@ -158,15 +215,17 @@ export default function PurchaseOrderDetail() {
                         <th className="px-3 py-2 text-right font-semibold text-slate-600 w-20">Qty</th>
                         <th className="px-3 py-2 text-left font-semibold text-slate-600 w-14">UOM</th>
                         <th className="px-3 py-2 text-right font-semibold text-slate-600 w-32">Unit Price</th>
+                        <th className="px-3 py-2 text-right font-semibold text-slate-600 w-24">Discount</th>
                         <th className="px-3 py-2 text-right font-semibold text-slate-600 w-28">Tax</th>
                         <th className="px-3 py-2 text-right font-semibold text-slate-600 w-32">Amount</th>
                         <th className="px-3 py-2 text-left font-semibold text-slate-600 w-28">Department</th>
                         <th className="px-3 py-2 text-left font-semibold text-slate-600 w-28">Location</th>
                         <th className="px-3 py-2 text-right font-semibold text-slate-600 w-24">Received</th>
+                        <th className="px-3 py-2 text-right font-semibold text-slate-600 w-24">Billed</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {(po.lines||[]).length===0 ? <tr><td colSpan={11} className="px-3 py-4 text-center text-slate-400 italic">No items</td></tr>
+                      {(po.lines||[]).length===0 ? <tr><td colSpan={12} className="px-3 py-4 text-center text-slate-400 italic">No items</td></tr>
                       : (po.lines||[]).map((l:any,i:number)=>(
                         <tr key={l.id} className="border-t border-slate-100">
                           <td className="px-3 py-1.5 text-slate-400">{l.line_number||i+1}</td>
@@ -175,27 +234,54 @@ export default function PurchaseOrderDetail() {
                           <td className="px-3 py-1.5 text-right">{formatNumber(l.quantity,2)}</td>
                           <td className="px-3 py-1.5 text-slate-500">{l.uom_code||'-'}</td>
                           <td className="px-3 py-1.5 text-right">{formatCurrency(l.unit_price)}</td>
+                          <td className="px-3 py-1.5 text-right text-amber-600">{Number(l.discount_amount)>0?`${Number(l.discount_amount).toLocaleString('id-ID',{minimumFractionDigits:2,maximumFractionDigits:2})}${Number(l.discount_percent)>0?` (${l.discount_percent}%)`:''}`:'-'}</td>
                           <td className="px-3 py-1.5 text-right">{formatCurrency(l.tax_amount)}</td>
                           <td className="px-3 py-1.5 text-right font-medium">{formatCurrency(l.amount)}</td>
                           <td className="px-3 py-1.5 text-slate-500">{l.department_name||'-'}</td>
                           <td className="px-3 py-1.5 text-slate-500">{l.location_name||'-'}</td>
                           <td className="px-3 py-1.5 text-right"><span className={parseFloat(l.qty_received)>=parseFloat(l.quantity)?'text-emerald-600':'text-amber-600'}>{formatNumber(l.qty_received,2)}</span></td>
+                          <td className="px-3 py-1.5 text-right"><span className={parseFloat(l.qty_billed||0)>=parseFloat(l.quantity)?'text-emerald-600':(parseFloat(l.qty_billed||0)>0?'text-amber-600':'text-slate-400')}>{formatNumber(l.qty_billed||0,2)}</span></td>
                         </tr>
                       ))}
                     </tbody>
-                    {(po.lines||[]).length>0&&(
-                      <tfoot><tr className="border-t-2 border-slate-300 bg-slate-50 font-semibold">
-                        <td colSpan={7} className="px-3 py-1.5 text-right text-slate-600">Total</td>
-                        <td className="px-3 py-1.5 text-right">{formatCurrency(po.total_amount)}</td>
-                        <td colSpan={3}/>
-                      </tr></tfoot>
-                    )}
                   </table>
                 </div>
-                {po.receipts?.length>0 && <div><div className="text-xs font-semibold text-slate-600 mb-1.5">Goods Receipts</div><div className="flex flex-wrap gap-2">{po.receipts.map((r:any)=><button key={r.id} onClick={()=>navigate(`/purchasing/receipts/${r.id}`)} className="text-xs text-blue-600 hover:underline border border-blue-200 rounded px-2 py-1 bg-blue-50">{r.receipt_number}</button>)}</div></div>}
-                {po.bills?.length>0 && <div><div className="text-xs font-semibold text-slate-600 mb-1.5">Vendor Bills</div><div className="flex flex-wrap gap-2">{po.bills.map((b:any)=><button key={b.id} onClick={()=>navigate(`/purchasing/bills/${b.id}`)} className="text-xs text-blue-600 hover:underline border border-blue-200 rounded px-2 py-1 bg-blue-50">{b.bill_number}</button>)}</div></div>}
               </div>
             )}
+            {activeTab==='related' && (() => {
+              const related = [
+                ...(po.receipts||[]).map((r:any) => ({ id:r.id, date:r.receipt_date, type:'Item Receipt', doc:r.receipt_number, status:r.status, amount:null, path:`/purchasing/receipts/${r.id}` })),
+                ...(po.bills||[]).map((b:any) => ({ id:b.id, date:b.bill_date, type:'Vendor Bill', doc:b.bill_number, status:b.status, amount:b.total_amount, path:`/purchasing/bills/${b.id}` })),
+              ].sort((a,b)=> new Date(a.date||0).getTime() - new Date(b.date||0).getTime());
+              return related.length === 0
+                ? <div className="py-8 text-center text-slate-400 italic text-xs border border-dashed border-slate-200 rounded">No related records yet</div>
+                : (
+                  <div className="border border-slate-200 rounded overflow-x-auto">
+                    <table className="w-full text-xs min-w-max">
+                      <thead className="bg-slate-50 border-b border-slate-200">
+                        <tr>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-600 w-28">Date</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-600 w-40">Type</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-600 w-44">Document #</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-600 w-32">Status</th>
+                          <th className="px-3 py-2 text-right font-semibold text-slate-600 w-36">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {related.map(r => (
+                          <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50">
+                            <td className="px-3 py-1.5">{r.date ? formatDate(r.date) : '-'}</td>
+                            <td className="px-3 py-1.5 text-slate-700">{r.type}</td>
+                            <td className="px-3 py-1.5"><button onClick={()=>navigate(r.path)} className="text-blue-600 hover:underline font-mono">{r.doc}</button></td>
+                            <td className="px-3 py-1.5"><span className="capitalize">{String(r.status||'').replace(/_/g,' ')}</span></td>
+                            <td className="px-3 py-1.5 text-right font-medium">{r.amount != null ? formatCurrency(r.amount) : '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+            })()}
             {activeTab==='files' && <TransactionFilesTab sourceType="purchase_order" sourceId={id!}/>}
             {activeTab==='gl' && (
               <div>
@@ -223,13 +309,6 @@ export default function PurchaseOrderDetail() {
           </div>
         </div>
 
-        <div className="bg-white border border-slate-200 rounded shadow-sm p-4">
-          <div className="flex justify-end"><div className="w-60 space-y-1 text-xs">
-            <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-slate-500">Subtotal</span><span>{formatCurrency(po.subtotal)}</span></div>
-            <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-slate-500">Tax</span><span>{formatCurrency(po.tax_amount)}</span></div>
-            <div className="flex justify-between py-1.5 font-bold text-sm"><span>Total</span><span className="text-blue-700">{formatCurrency(po.total_amount)}</span></div>
-          </div></div>
-        </div>
       </div>
     </div>
   );

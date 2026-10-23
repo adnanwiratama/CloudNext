@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import api from '../../services/api';
 import { Loader2, ChevronLeft, ChevronRight, Download, Printer, FileText } from 'lucide-react';
+import { usePermissions } from '../../hooks/usePermissions';
 
 interface Check {
   id: string;
@@ -22,6 +23,7 @@ const SORT_OPTIONS   = ['Recently Created', 'Date', 'Amount', 'Check #', 'Payee'
 
 export default function ChecksList() {
   const navigate = useNavigate();
+  const { canView, canCreate } = usePermissions();
   const [checks,   setChecks]   = useState<Check[]>([]);
   const [filtered, setFiltered] = useState<Check[]>([]);
   const [loading,  setLoading]  = useState(true);
@@ -82,6 +84,16 @@ export default function ChecksList() {
   const totalPages = Math.ceil(filtered.length / PER_PAGE);
   const paginated  = filtered.slice((page-1)*PER_PAGE, page*PER_PAGE);
 
+  if (!canView('check')) return (
+    <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+      <div className="bg-white border border-slate-200 rounded shadow-sm p-8 max-w-md text-center">
+        <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center mx-auto mb-4"><FileText className="text-red-400" size={24}/></div>
+        <h2 className="text-lg font-semibold text-slate-800 mb-1">Akses Ditolak</h2>
+        <p className="text-sm text-slate-500">Anda tidak memiliki izin untuk melihat Write Checks.</p>
+      </div>
+    </div>
+  );
+
   if (loading) return (
     <div className="flex items-center justify-center h-64">
       <Loader2 className="animate-spin text-blue-500" size={32}/>
@@ -105,10 +117,12 @@ export default function ChecksList() {
           </div>
         </div>
         <div className="max-w-screen-xl mx-auto px-8 py-2 flex items-center gap-2">
+          {canCreate('check') && (
           <button onClick={() => navigate('/bank/write-checks')}
             className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-700 text-white text-sm font-medium rounded hover:bg-blue-800 transition-colors">
             New Transaction
           </button>
+          )}
         </div>
       </div>
 

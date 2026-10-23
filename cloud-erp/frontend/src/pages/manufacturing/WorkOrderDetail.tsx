@@ -1,13 +1,15 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronUp, ChevronDown, Play, CheckCircle, Package, Loader2, CheckCircle2 } from 'lucide-react';
+import { ChevronUp, ChevronDown, Play, Package, Loader2, CheckCircle2, Printer } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { StatusBadge } from '../../components/common/DataTable';
-import { formatCurrency, formatDate, formatNumber } from '../../utils/format';
+import { formatCurrency, formatDate, formatNumber, formatStatus } from '../../utils/format';
 import TransactionFilesTab from '../../components/transaction/TransactionFilesTab';
 import TransactionSysInfoTab from '../../components/transaction/TransactionSysInfoTab';
+import { usePrintDocument } from '../../hooks/usePrintDocument';
 import toast from 'react-hot-toast';
+import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
 
 export default function WorkOrderDetail() {
   const { id } = useParams<{ id: string }>();
@@ -19,10 +21,6 @@ export default function WorkOrderDetail() {
   const [primaryOpen, setPrimaryOpen] = useState(true);
   const [classOpen, setClassOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<'materials'|'files'|'gl'|'sysinfo'>('materials');
-  const [showCompleteForm, setShowCompleteForm] = useState(false);
-  const [completedQty, setCompletedQty] = useState('');
-  const [scrappedQty, setScrappedQty] = useState('0');
-
   useEffect(() => { if (justSaved && id) qc.invalidateQueries({ queryKey: ['work-order', id] }); }, [justSaved, id, qc]);
 
   const { data: wo, isLoading } = useQuery({
@@ -31,38 +29,46 @@ export default function WorkOrderDetail() {
     enabled: !!id, staleTime: 0, refetchOnMount: true,
   });
 
+  const { print } = usePrintDocument();
+
   const releaseMutation = useMutation({
     mutationFn: () => api.post(`/api/manufacturing/work-orders/${id}/release`),
     onSuccess: () => { toast.success('Work order released'); qc.invalidateQueries({ queryKey: ['work-order', id] }); },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed'),
   });
-  const issueMutation = useMutation({
-    mutationFn: () => {
-      const lines = (wo?.materials||[]).map((m:any) => ({
-        itemId: m.item_id, quantity: m.planned_quantity - m.issued_quantity, uomId: m.uom_id, woMaterialId: m.id,
-      })).filter((l:any) => l.quantity > 0);
-      return api.post(`/api/manufacturing/work-orders/${id}/issue-materials`, { issueDate: new Date().toISOString().split('T')[0], lines });
-    },
-    onSuccess: () => { toast.success('Materials issued'); qc.invalidateQueries({ queryKey: ['work-order', id] }); },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed'),
-  });
-  const completeMutation = useMutation({
-    mutationFn: () => api.post(`/api/manufacturing/work-orders/${id}/complete`, {
-      completionDate: new Date().toISOString().split('T')[0],
-      completedQuantity: parseFloat(completedQty), scrappedQuantity: parseFloat(scrappedQty||'0'),
-    }),
-    onSuccess: () => { toast.success('Work order completed'); setShowCompleteForm(false); qc.invalidateQueries({ queryKey: ['work-order', id] }); },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed'),
-  });
-
   if (isLoading) return <div className="flex items-center justify-center h-64"><Loader2 className="animate-spin text-blue-500" size={32}/></div>;
   if (!wo) return <div className="p-6 text-red-600">Work order not found.</div>;
 
   const canRelease  = wo.status === 'planned';
-  const canIssue    = ['released','in_progress'].includes(wo.status);
-  const canComplete = ['released','in_progress'].includes(wo.status);
+  const canBuild    = ['released','in_progress','planned'].includes(wo.status);
   const dis = 'w-full border border-slate-200 rounded text-sm px-2 py-1.5 bg-slate-50 text-slate-700 cursor-default';
   const pct = wo.planned_quantity > 0 ? Math.min(100, Math.round((wo.completed_quantity / wo.planned_quantity) * 100)) : 0;
+
+  const handlePrint = () => {
+    if (!wo) return;
+    print({
+      title: 'Work Order',
+      number: wo.wo_number,
+      status: formatStatus(wo.status),
+      partyLabel: 'Item',
+      partyName: `${wo.item_code || ''} - ${wo.item_name || ''}`.trim(),
+      meta: [
+        { label: 'BOM', value: wo.bom_name || wo.bom_number || '-' },
+        { label: 'Start Date', value: formatDate(wo.planned_start_date) },
+        { label: 'End Date', value: formatDate(wo.planned_end_date) },
+        { label: 'Status', value: formatStatus(wo.status) },
+        { label: 'Planned Qty', value: formatNumber(wo.planned_quantity, 0) },
+      ],
+      columns: [
+        { label: 'Item', value: (m: any) => `${m.item_code || ''} ${m.item_name || ''}`.trim() },
+        { label: 'Planned', align: 'right', value: (m: any) => formatNumber(m.planned_quantity, 2) },
+        { label: 'Issued', align: 'right', value: (m: any) => formatNumber(m.issued_quantity, 2) },
+        { label: 'UOM', value: (m: any) => m.uom_code || '' },
+      ],
+      rows: wo.materials || [],
+      memo: wo.memo,
+    });
+  };
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -83,29 +89,20 @@ export default function WorkOrderDetail() {
         </div>
         <div className="max-w-screen-xl mx-auto px-4 py-2 flex items-center gap-2 flex-wrap">
           <button onClick={() => navigate('/manufacturing/work-orders')} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Back</button>
+          <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
           {canRelease && <button onClick={() => releaseMutation.mutate()} disabled={releaseMutation.isPending} className="flex items-center gap-1 px-3 py-1.5 bg-blue-700 text-white text-sm rounded hover:bg-blue-800 disabled:opacity-60"><Play size={13}/> Release</button>}
-          {canIssue && <button onClick={() => issueMutation.mutate()} disabled={issueMutation.isPending} className="flex items-center gap-1 px-3 py-1.5 bg-amber-500 text-white text-sm rounded hover:bg-amber-600 disabled:opacity-60">{issueMutation.isPending?<Loader2 size={12} className="animate-spin"/>:<Package size={13}/>} Issue Materials</button>}
-          {canComplete && <button onClick={() => { setCompletedQty(String(wo.planned_quantity - wo.completed_quantity)); setShowCompleteForm(true); }} className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-sm rounded hover:bg-green-700"><CheckCircle size={13}/> Complete</button>}
+          {canBuild && (
+            <button onClick={() => navigate(`/manufacturing/assembly-builds/new?itemId=${wo.item_id}&workOrderId=${wo.id}${wo.bom_id ? `&bomId=${wo.bom_id}` : ''}`)}
+              className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white text-sm rounded hover:bg-emerald-700">
+              <Package size={13}/> Build Assembly
+            </button>
+          )}
+          <DeleteTransactionButton type="work_order" id={id!} listPath="/manufacturing/work-orders" label={wo.wo_number} />
         </div>
       </div>
 
       <div className="p-4 space-y-3 max-w-screen-xl mx-auto">
         {justSaved && <div className="bg-green-50 border border-green-200 rounded px-4 py-3 flex items-start gap-3"><CheckCircle2 size={18} className="text-green-600 mt-0.5 flex-shrink-0"/><div><p className="text-sm font-semibold text-green-800">Confirmation</p><p className="text-sm text-green-700">Work Order successfully saved</p></div></div>}
-
-        {/* Complete form */}
-        {showCompleteForm && (
-          <div className="bg-white border-2 border-emerald-300 rounded shadow-sm p-4">
-            <div className="text-sm font-semibold text-emerald-800 mb-3">Record Production Completion</div>
-            <div className="grid grid-cols-4 gap-4 items-end">
-              <div><label className="block text-xs text-slate-500 mb-1">Completed Qty</label><input type="number" value={completedQty} onChange={e=>setCompletedQty(e.target.value)} className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm"/></div>
-              <div><label className="block text-xs text-slate-500 mb-1">Scrapped Qty</label><input type="number" value={scrappedQty} onChange={e=>setScrappedQty(e.target.value)} className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm"/></div>
-              <div className="flex gap-2 col-span-2">
-                <button onClick={() => completeMutation.mutate()} disabled={completeMutation.isPending||!completedQty} className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-sm rounded hover:bg-green-700 disabled:opacity-60">{completeMutation.isPending?<Loader2 size={12} className="animate-spin"/>:<CheckCircle size={13}/>} Confirm</button>
-                <button onClick={() => setShowCompleteForm(false)} className="px-3 py-1.5 border border-slate-300 text-sm rounded hover:bg-slate-50">Cancel</button>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Primary */}
         <div className="bg-white border border-slate-200 rounded shadow-sm">

@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronUp, ChevronDown, Loader2 } from 'lucide-react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import api from '../../services/api';
 import { useFormOptions } from '../../hooks/useFormOptions';
+import { formatNumber } from '../../utils/format';
 import TransactionFileUploadRow, { FileRow, uploadFileRows } from '../../components/transaction/TransactionFileUploadRow';
 import toast from 'react-hot-toast';
 
@@ -32,6 +33,28 @@ export default function WorkOrderForm() {
   });
   const filteredBoms = (boms||[]).filter((b:any) => !form.itemId || b.finished_good_id === form.itemId);
   const finishedGoods = items.filter((i:any) => ['finished_good','assembly','inventory'].includes(i.type));
+
+  // Auto-select the item's active BOM when the item changes (query by finishedGoodId → pick first).
+  const { data: itemBoms } = useQuery({
+    queryKey: ['wo-item-boms', form.itemId],
+    queryFn: () => api.get('/api/manufacturing/boms', { params: { finishedGoodId: form.itemId, limit: 200 } }).then(r => r.data.data || []),
+    enabled: !!form.itemId,
+  });
+  useEffect(() => {
+    if (!form.itemId) return;
+    if (itemBoms && itemBoms.length > 0 && !form.bomId) {
+      setForm(f => (f.bomId ? f : { ...f, bomId: itemBoms[0].id }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemBoms, form.itemId]);
+
+  // Read-only preview of the selected BOM's components (fetch full BOM for its components).
+  const { data: bomPreview } = useQuery({
+    queryKey: ['wo-bom-preview', form.bomId],
+    queryFn: () => api.get(`/api/manufacturing/boms/${form.bomId}`).then(r => r.data.data),
+    enabled: !!form.bomId,
+  });
+  const previewComponents: any[] = bomPreview?.components || bomPreview?.lines || [];
 
   const mutation = useMutation({
     mutationFn: (data: any) => api.post('/api/manufacturing/work-orders', data),
@@ -171,10 +194,39 @@ export default function WorkOrderForm() {
           </div>
           <div className="p-4">
             {activeTab==='info' && (
-              <div className="text-sm text-slate-500 bg-blue-50 border border-blue-100 rounded p-4">
-                <p className="font-medium text-blue-800 mb-1">GL Impact on Completion</p>
-                <p className="text-xs text-blue-700"><strong>Dr. Finished Goods Inventory → Cr. WIP (Work in Process)</strong><br/>
-                Components consumed: <strong>Dr. WIP → Cr. Raw Material Inventory</strong></p>
+              <div className="space-y-3">
+                {form.bomId && previewComponents.length > 0 && (
+                  <div className="border border-slate-200 rounded overflow-x-auto">
+                    <div className="px-3 py-2 bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600">
+                      BOM Components {bomPreview?.bom_number ? `· ${bomPreview.bom_number}` : ''} — producing {formatNumber(Number(form.quantity) || 0, 2)} unit(s)
+                    </div>
+                    <table className="w-full text-xs min-w-max">
+                      <thead className="bg-slate-50 border-b border-slate-200">
+                        <tr>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-600">Item</th>
+                          <th className="px-3 py-2 text-right font-semibold text-slate-600 w-28">Qty per Unit</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-600 w-20">Unit</th>
+                          <th className="px-3 py-2 text-right font-semibold text-slate-600 w-32">Total Required</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {previewComponents.map((c: any, i: number) => (
+                          <tr key={c.id || i} className="border-t border-slate-100">
+                            <td className="px-3 py-1.5"><span className="font-mono text-xs text-blue-600">{c.item_code}</span><div>{c.item_name}</div></td>
+                            <td className="px-3 py-1.5 text-right">{formatNumber(c.quantity, 4)}</td>
+                            <td className="px-3 py-1.5 text-slate-500">{c.uom_code || c.uom_name || ''}</td>
+                            <td className="px-3 py-1.5 text-right font-medium text-blue-700">{formatNumber(parseFloat(c.quantity) * (Number(form.quantity) || 0), 4)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <div className="text-sm text-slate-500 bg-blue-50 border border-blue-100 rounded p-4">
+                  <p className="font-medium text-blue-800 mb-1">GL Impact on Completion</p>
+                  <p className="text-xs text-blue-700"><strong>Dr. Finished Goods Inventory → Cr. WIP (Work in Process)</strong><br/>
+                  Components consumed: <strong>Dr. WIP → Cr. Raw Material Inventory</strong></p>
+                </div>
               </div>
             )}
             {activeTab==='files' && <TransactionFileUploadRow rows={fileRows} setRows={setFileRows}/>}

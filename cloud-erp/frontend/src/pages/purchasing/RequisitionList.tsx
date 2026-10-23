@@ -16,6 +16,7 @@ export default function RequisitionList() {
   return (
     <TransactionListPage
       title="Purchase Requisitions"
+      permissionKey="purchase_requisition"
       iconBg="bg-amber-600"
       iconText="PR"
       endpoint="/api/purchasing/requisitions"

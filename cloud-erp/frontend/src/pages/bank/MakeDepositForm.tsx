@@ -1,11 +1,15 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { ChevronUp, ChevronDown, Loader2, Plus, X, Trash2 } from 'lucide-react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
 import { useFormOptions } from '../../hooks/useFormOptions';
+import NumberInput from '../../components/common/NumberInput';
 import TransactionFileUploadRow, { FileRow, uploadFileRows } from '../../components/transaction/TransactionFileUploadRow';
+import { formatCurrency } from '../../utils/format';
 import toast from 'react-hot-toast';
+
+type EntityType = '' | 'customer' | 'vendor' | 'employee';
 
 interface DepositLine {
   id: number;
@@ -14,14 +18,30 @@ interface DepositLine {
   amount: number;
   department: string;
   location: string;
+  entityType: EntityType;   // combined Entity: which kind
+  entityId: string;         // combined Entity: the id
 }
 
 export default function MakeDepositForm() {
   const navigate = useNavigate();
-  const { accounts, locations, departments } = useFormOptions();
+  const { id } = useParams<{ id: string }>();
+  const isEdit = !!id && id !== 'new';
+  const { accounts, locations, departments, customers, vendors, employees } = useFormOptions();
 
   const bankAccounts    = accounts.filter((a: any) => a.is_bank || a.subtype === 'bank' || ['1010','1020','1025','1030'].includes(a.code));
   const creditAccounts  = accounts.filter((a: any) => a.type !== 'bank');
+
+  const empName = (e: any) => e.name || e.full_name || [e.first_name, e.last_name].filter(Boolean).join(' ') || e.email || '-';
+
+  // Combined Entity dropdown: value is encoded "type:id"; label resolves across all 3 sources.
+  const entityValue = (l: { entityType: EntityType; entityId: string }) => l.entityType && l.entityId ? `${l.entityType}:${l.entityId}` : '';
+  const entityLabel = (type: EntityType, entId: string): string => {
+    if (!type || !entId) return '';
+    if (type === 'customer') return customers.find((c: any) => c.id === entId)?.name || '';
+    if (type === 'vendor')   return vendors.find((v: any) => v.id === entId)?.name || '';
+    if (type === 'employee') { const e = employees.find((x: any) => x.id === entId); return e ? empName(e) : ''; }
+    return '';
+  };
 
   const { data: subsidiariesData } = useQuery({
     queryKey: ['subsidiaries'],
@@ -50,15 +70,59 @@ export default function MakeDepositForm() {
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
 
   useEffect(() => {
-    if (subsidiaries.length > 0 && !form.subsidiaryId) set('subsidiaryId', subsidiaries[0].id);
+    if (!isEdit && subsidiaries.length > 0 && !form.subsidiaryId) set('subsidiaryId', subsidiaries[0].id);
   }, [subsidiaries]);
+
+  // ── Selected bank balance ───────────────────────────────────────────────────
+  // Prefer the live /balance endpoint; fall back to net_balance from the options.
+  const selectedBank = accounts.find((a: any) => a.id === form.bankAccountId);
+  const { data: bankBalance } = useQuery({
+    queryKey: ['account-balance', form.bankAccountId],
+    queryFn: () => api.get(`/api/accounting/accounts/${form.bankAccountId}/balance`).then(r => r.data.data?.balance ?? 0),
+    enabled: !!form.bankAccountId,
+    staleTime: 10000,
+  });
+  const effectiveBalance = (form.bankAccountId)
+    ? (bankBalance != null ? Number(bankBalance) : Number(selectedBank?.net_balance ?? 0))
+    : null;
 
   // ── Line state ────────────────────────────────────────────────────────────
   const [counter, setCounter] = useState(1000);
   const [lines,   setLines]   = useState<DepositLine[]>([]);
   const [editId,  setEditId]  = useState<number | null>(null);
-  const blank = (): DepositLine => ({ id: counter, accountId: '', memo: '', amount: 0, department: '', location: '' });
+  const blank = (): DepositLine => ({ id: counter, accountId: '', memo: '', amount: 0, department: '', location: '', entityType: '', entityId: '' });
   const [editLine, setEditLine] = useState<DepositLine>(blank());
+
+  // ── Edit mode: load existing deposit ────────────────────────────────────────
+  const { data: existing } = useQuery({
+    queryKey: ['deposit-edit', id],
+    queryFn: () => api.get(`/api/bank/deposits/${id}`).then(r => r.data.data),
+    enabled: isEdit, staleTime: 0,
+  });
+  const [loadedId, setLoadedId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!existing || loadedId === existing.id) return;
+    setForm({
+      bankAccountId: existing.bank_account_id || '',
+      depositDate: existing.deposit_date ? new Date(existing.deposit_date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+      reference: existing.reference || '',
+      memo: existing.memo || '',
+      subsidiaryId: existing.subsidiary_id || '',
+      departmentId: existing.department_id || '',
+      locationId: existing.location_id || '',
+    });
+    let c = counter;
+    const mapped: DepositLine[] = (existing.lines || []).map((l: any) => {
+      c += 1;
+      const entityType: EntityType = l.entity_customer_id ? 'customer' : l.entity_vendor_id ? 'vendor' : l.entity_employee_id ? 'employee' : '';
+      const entityId = l.entity_customer_id || l.entity_vendor_id || l.entity_employee_id || '';
+      return { id: c, accountId: l.account_id || '', memo: l.memo || '', amount: Number(l.amount || 0), department: l.department_id || '', location: l.location_id || '', entityType, entityId };
+    });
+    setCounter(c + 1);
+    setLines(mapped);
+    setLoadedId(existing.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existing]);
 
   const totalAmount = lines.reduce((s, l) => s + l.amount, 0);
 
@@ -80,21 +144,22 @@ export default function MakeDepositForm() {
   // ── Save ──────────────────────────────────────────────────────────────────
   const mutation = useMutation({
     mutationFn: async (data: any) => {
+      if (isEdit) return api.put(`/api/bank/deposits/${id}`, data);
       const numRes = await api.get('/api/settings/next-number/DEP');
       data.documentNumber = numRes.data.data.formatted;
       return api.post('/api/bank/deposits', data);
     },
     onSuccess: async (res) => {
-      const savedId = res.data?.data?.id;
+      const savedId = res.data?.data?.id || id;
       if (fileRows.filter(r => r.file).length > 0 && savedId) {
         try { await uploadFileRows(fileRows, 'bank_deposit', savedId, api.post.bind(api)); }
         catch (e: any) { toast.error('Deposit saved but file upload failed: ' + (e.response?.data?.error || e.message)); }
       }
-      toast.success('Deposit recorded');
+      toast.success(isEdit ? 'Deposit updated' : 'Deposit recorded');
       if (savedId) navigate(`/bank/deposits/${savedId}`, { state: { justSaved: true } });
       else navigate('/bank/deposits-list');
     },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to record deposit'),
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to save deposit'),
   });
 
   const handleSave = () => {
@@ -110,7 +175,13 @@ export default function MakeDepositForm() {
       subsidiaryId:  form.subsidiaryId || null,
       departmentId:  form.departmentId || null,
       locationId:    form.locationId   || null,
-      lines: lines.map(l => ({ accountId: l.accountId, memo: l.memo, amount: l.amount, department: l.department, location: l.location })),
+      lines: lines.map(l => ({
+        accountId: l.accountId, memo: l.memo, amount: l.amount,
+        department: l.department, location: l.location,
+        entityCustomerId: l.entityType === 'customer' ? l.entityId : null,
+        entityVendorId:   l.entityType === 'vendor'   ? l.entityId : null,
+        entityEmployeeId: l.entityType === 'employee' ? l.entityId : null,
+      })),
     });
   };
 
@@ -123,7 +194,7 @@ export default function MakeDepositForm() {
           <div className="max-w-screen-xl mx-auto px-4 py-2 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded bg-blue-600 flex items-center justify-center text-white font-bold text-sm">↓</div>
-              <h1 className="text-xl font-semibold text-slate-800">Make Deposit</h1>
+              <h1 className="text-xl font-semibold text-slate-800">{isEdit ? 'Edit Deposit' : 'Make Deposit'}</h1>
             </div>
             <div className="flex items-center gap-5 text-sm text-blue-600">
               <button onClick={() => navigate('/bank/deposits-list')} className="hover:underline">List</button>
@@ -159,15 +230,23 @@ export default function MakeDepositForm() {
                 <div className="space-y-3">
                   <div>
                     <div className="text-xs text-slate-500 mb-0.5">Transaction Number</div>
-                    <div className="text-sm font-medium text-slate-800">To Be Generated</div>
+                    <div className="text-sm font-medium text-slate-800">{isEdit ? (existing?.deposit_number || '—') : 'To Be Generated'}</div>
                   </div>
                   <div>
                     <label className="block text-xs text-slate-500 mb-1">Bank Account <span className="text-red-500">*</span></label>
                     <select value={form.bankAccountId} onChange={e => set('bankAccountId', e.target.value)}
                       className="w-full border border-slate-300 rounded text-sm px-2 py-1.5 focus:outline-none focus:border-blue-400 bg-white">
                       <option value=""></option>
-                      {bankAccounts.map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                      {bankAccounts.map((a: any) => <option key={a.id} value={a.id}>{a.code} - {a.name}</option>)}
                     </select>
+                    {form.bankAccountId && (
+                      <div className="mt-1.5 text-xs flex items-center gap-1.5">
+                        <span className="text-slate-500">Current Balance:</span>
+                        <span className={`font-semibold ${(effectiveBalance ?? 0) < 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+                          {effectiveBalance == null ? '…' : formatCurrency(effectiveBalance)}
+                        </span>
+                      </div>
+                    )}
                   </div>
                   <div>
                     <label className="block text-xs text-slate-500 mb-1">Deposit Date <span className="text-red-500">*</span></label>
@@ -188,25 +267,9 @@ export default function MakeDepositForm() {
                       placeholder="Bank slip / reference"
                       className="w-full border border-slate-300 rounded text-sm px-2 py-1.5 focus:outline-none focus:border-blue-400"/>
                   </div>
-                  <div>
-                    <label className="block text-xs text-slate-500 mb-1">Department</label>
-                    <select value={form.departmentId} onChange={e => set('departmentId', e.target.value)}
-                      className="w-full border border-slate-300 rounded text-sm px-2 py-1.5 focus:outline-none focus:border-blue-400 bg-white">
-                      <option value=""></option>
-                      {departments.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}
-                    </select>
-                  </div>
                 </div>
                 {/* Col 3 */}
                 <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs text-slate-500 mb-1">Location</label>
-                    <select value={form.locationId} onChange={e => set('locationId', e.target.value)}
-                      className="w-full border border-slate-300 rounded text-sm px-2 py-1.5 focus:outline-none focus:border-blue-400 bg-white">
-                      <option value=""></option>
-                      {locations.map((l: any) => <option key={l.id} value={l.id}>{l.name}</option>)}
-                    </select>
-                  </div>
                   <div>
                     <label className="block text-xs text-slate-500 mb-1">Memo</label>
                     <input type="text" value={form.memo} onChange={e => set('memo', e.target.value)}
@@ -274,7 +337,8 @@ export default function MakeDepositForm() {
                   <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
                       <th className="px-3 py-2 text-left font-semibold text-slate-600 w-52">Account <span className="text-red-500">*</span></th>
-                      <th className="px-3 py-2 text-left font-semibold text-slate-600 w-48">Memo</th>
+                      <th className="px-3 py-2 text-left font-semibold text-slate-600 w-52">Entity</th>
+                      <th className="px-3 py-2 text-left font-semibold text-slate-600 w-40">Memo</th>
                       <th className="px-3 py-2 text-right font-semibold text-slate-600 w-36">Amount</th>
                       <th className="px-3 py-2 text-left font-semibold text-slate-600 w-28">Department</th>
                       <th className="px-3 py-2 text-left font-semibold text-slate-600 w-28">Location</th>
@@ -285,6 +349,11 @@ export default function MakeDepositForm() {
                       <tr key={line.id} onClick={() => { setEditLine({ ...line }); setEditId(line.id); }}
                         className="border-t border-slate-100 hover:bg-blue-50 cursor-pointer">
                         <td className="px-3 py-1.5 text-slate-700">{creditAccounts.find((a: any) => a.id === line.accountId)?.name || '-'}</td>
+                        <td className="px-3 py-1.5 text-slate-600">
+                          {line.entityType && line.entityId
+                            ? <>{entityLabel(line.entityType, line.entityId) || '-'}<span className="ml-1 text-2xs text-slate-400">({line.entityType})</span></>
+                            : '-'}
+                        </td>
                         <td className="px-3 py-1.5 text-slate-600">{line.memo || '-'}</td>
                         <td className="px-3 py-1.5 text-right font-medium text-slate-800">{line.amount.toLocaleString('id-ID', { minimumFractionDigits: 2 })}</td>
                         <td className="px-3 py-1.5 text-slate-500">{departments.find((d: any) => d.id === line.department)?.name || '-'}</td>
@@ -301,12 +370,27 @@ export default function MakeDepositForm() {
                           </select>
                         </td>
                         <td className="px-1.5 py-1">
+                          <select value={entityValue(editLine)}
+                            onChange={e => { const [t, eid] = e.target.value.split(':'); setEditLine(l => ({ ...l, entityType: (t as EntityType) || '', entityId: eid || '' })); }}
+                            className="w-full border border-slate-300 rounded text-xs px-1.5 py-1 focus:outline-none focus:border-blue-400 bg-white">
+                            <option value="">-- None --</option>
+                            <optgroup label="Customers">
+                              {customers.map((c: any) => <option key={`c-${c.id}`} value={`customer:${c.id}`}>{c.name}</option>)}
+                            </optgroup>
+                            <optgroup label="Vendors">
+                              {vendors.map((v: any) => <option key={`v-${v.id}`} value={`vendor:${v.id}`}>{v.name}</option>)}
+                            </optgroup>
+                            <optgroup label="Employees">
+                              {employees.map((emp: any) => <option key={`e-${emp.id}`} value={`employee:${emp.id}`}>{empName(emp)}</option>)}
+                            </optgroup>
+                          </select>
+                        </td>
+                        <td className="px-1.5 py-1">
                           <input type="text" value={editLine.memo} onChange={e => setEditLine(l => ({ ...l, memo: e.target.value }))}
                             className="w-full border border-slate-300 rounded text-xs px-1.5 py-1 focus:outline-none focus:border-blue-400"/>
                         </td>
                         <td className="px-1.5 py-1">
-                          <input type="number" step="0.01" value={editLine.amount || ''}
-                            onChange={e => setEditLine(l => ({ ...l, amount: Number(e.target.value) }))}
+                          <NumberInput value={editLine.amount} onChange={v => setEditLine(l => ({ ...l, amount: v }))}
                             className="w-full border border-slate-300 rounded text-xs px-1.5 py-1 focus:outline-none focus:border-blue-400 text-right"/>
                         </td>
                         <td className="px-1.5 py-1">
@@ -327,14 +411,14 @@ export default function MakeDepositForm() {
                     )}
                     {editId === null && (
                       <tr onClick={startNew} className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer">
-                        <td colSpan={5} className="px-3 py-2 text-slate-400 text-xs italic">Click to add a line...</td>
+                        <td colSpan={6} className="px-3 py-2 text-slate-400 text-xs italic">Click to add a line...</td>
                       </tr>
                     )}
                   </tbody>
                   {lines.length > 0 && (
                     <tfoot>
                       <tr className="border-t-2 border-slate-300 bg-slate-50 font-semibold">
-                        <td colSpan={2} className="px-3 py-2 text-right text-slate-600 text-xs">TOTAL</td>
+                        <td colSpan={3} className="px-3 py-2 text-right text-slate-600 text-xs">TOTAL</td>
                         <td className="px-3 py-2 text-right text-slate-800">{totalAmount.toLocaleString('id-ID', { minimumFractionDigits: 2 })}</td>
                         <td colSpan={2}/>
                       </tr>

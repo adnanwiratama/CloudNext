@@ -21,6 +21,7 @@ export default function GoodReceiptList() {
   return (
     <TransactionListPage
       title="Item Receipts"
+      permissionKey="item_receipt"
       iconBg="bg-amber-600"
       iconText="IR"
       endpoint="/api/purchasing/receipts"

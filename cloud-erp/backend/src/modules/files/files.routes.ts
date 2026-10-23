@@ -168,17 +168,60 @@ router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
   } catch (e: any) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+// Map a source_type to its table/number-column/detail-route so the File Cabinet
+// can show the originating document number and link back to it.
+const SOURCE_MAP: Record<string, { table: string; numCol: string; route: (id: string) => string; label: string }> = {
+  bank_check:           { table: 'bank_checks',          numCol: 'check_number',       route: id => `/bank/checks/${id}`,            label: 'Write Check' },
+  bank_deposit:         { table: 'bank_deposits',        numCol: 'deposit_number',     route: id => `/bank/deposits/${id}`,          label: 'Bank Deposit' },
+  bank_transfer:        { table: 'bank_transfers',       numCol: 'transfer_number',    route: id => `/bank/transfers/${id}`,         label: 'Transfer Funds' },
+  invoice:              { table: 'invoices',             numCol: 'invoice_number',     route: id => `/sales/invoices/${id}`,         label: 'Invoice' },
+  sales_order:          { table: 'sales_orders',         numCol: 'order_number',       route: id => `/sales/orders/${id}`,           label: 'Sales Order' },
+  quotation:            { table: 'quotations',           numCol: 'quotation_number',   route: id => `/sales/quotations/${id}`,       label: 'Quotation' },
+  item_fulfillment:     { table: 'item_fulfillments',    numCol: 'fulfillment_number', route: id => `/sales/fulfillments/${id}`,     label: 'Item Fulfillment' },
+  customer_payment:     { table: 'customer_payments',    numCol: 'payment_number',     route: id => `/sales/payments/${id}`,         label: 'Customer Payment' },
+  customer_deposit:     { table: 'customer_deposits',    numCol: 'deposit_number',     route: id => `/sales/deposits/${id}`,         label: 'Customer Deposit' },
+  purchase_order:       { table: 'purchase_orders',      numCol: 'po_number',          route: id => `/purchasing/orders/${id}`,      label: 'Purchase Order' },
+  purchase_requisition: { table: 'purchase_requisitions',numCol: 'requisition_number', route: id => `/purchasing/requisitions/${id}`,label: 'Purchase Requisition' },
+  vendor_bill:          { table: 'vendor_bills',         numCol: 'bill_number',        route: id => `/purchasing/bills/${id}`,       label: 'Vendor Bill' },
+  bill_payment:         { table: 'bill_payments',        numCol: 'payment_number',     route: id => `/purchasing/payments/${id}`,    label: 'Bill Payment' },
+  item_receipt:         { table: 'item_receipts',        numCol: 'receipt_number',     route: id => `/purchasing/receipts/${id}`,    label: 'Item Receipt' },
+  journal_entry:        { table: 'journal_entries',      numCol: 'journal_number',     route: id => `/accounting/journals/${id}`,    label: 'Journal Entry' },
+  expense_report:       { table: 'expense_reports',      numCol: 'report_number',      route: id => `/employee/expenses/${id}`,      label: 'Expense Report' },
+  inventory_adjustment: { table: 'inventory_adjustments',numCol: 'adjustment_number',  route: id => `/inventory/adjustments/${id}`,  label: 'Inventory Adjustment' },
+};
+
 // ── GET /files/cabinet — list all files for company (File Cabinet view) ───────
 router.get('/cabinet', async (req: Request, res: Response): Promise<void> => {
   try {
+    const companyId = req.user!.companyId;
     const { folder, sourceType, search } = req.query;
-    let q = db('file_cabinet').where({ company_id: req.user!.companyId, is_deleted: false });
+    let q = db('file_cabinet').where({ company_id: companyId, is_deleted: false });
     if (folder)     q = q.where({ folder: folder as string });
     if (sourceType) q = q.where({ source_type: sourceType as string });
-    if (search)     q = q.whereILike('original_name', `%${search}%`);
-    const files = await q.orderBy('created_at', 'desc').limit(200);
-    res.json({ success: true, data: files });
-  } catch (e: any) { res.status(500).json({ success: false, error: e.message }); }
+    if (search)     q = q.where((qb: any) => qb.whereILike('original_name', `%${search}%`).orWhereILike('title', `%${search}%`));
+    const files = await q.orderBy('created_at', 'desc').limit(500);
+
+    // Resolve the source document number + route per file (best-effort).
+    const enriched = await Promise.all(files.map(async (f: any) => {
+      const m = SOURCE_MAP[f.source_type];
+      let sourceNumber: string | null = null;
+      let sourceRoute: string | null = null;
+      const sourceLabel = m?.label || String(f.source_type || '').replace(/_/g, ' ');
+      if (m) {
+        try {
+          const src = await db(m.table).where({ id: f.source_id }).select(m.numCol).first();
+          if (src) { sourceNumber = src[m.numCol]; sourceRoute = m.route(f.source_id); }
+        } catch { /* table/column may not exist — ignore */ }
+      }
+      return { ...f, source_label: sourceLabel, source_number: sourceNumber, source_route: sourceRoute };
+    }));
+
+    // Filter metadata for the UI dropdowns.
+    const folders = await db('file_cabinet').where({ company_id: companyId, is_deleted: false }).distinct('folder').pluck('folder');
+    const sourceTypes = await db('file_cabinet').where({ company_id: companyId, is_deleted: false }).distinct('source_type').pluck('source_type');
+
+    res.json({ success: true, data: enriched, folders: folders.filter(Boolean), sourceTypes: sourceTypes.filter(Boolean) });
+  } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: e.message }); }
 });
 
 export default router;

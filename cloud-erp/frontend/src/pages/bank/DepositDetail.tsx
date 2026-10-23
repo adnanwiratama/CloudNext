@@ -1,10 +1,14 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronUp, ChevronDown, Loader2, CheckCircle2 } from 'lucide-react';
+import { ChevronUp, ChevronDown, Loader2, CheckCircle2, Printer } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
+import { formatCurrency, formatDate, formatStatus } from '../../utils/format';
 import TransactionFilesTab from '../../components/transaction/TransactionFilesTab';
 import TransactionSysInfoTab from '../../components/transaction/TransactionSysInfoTab';
+import { usePrintDocument } from '../../hooks/usePrintDocument';
+import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
+import EditTransactionButton from '../../components/transaction/EditTransactionButton';
 
 export default function DepositDetail() {
   const { id } = useParams<{ id: string }>();
@@ -25,12 +29,40 @@ export default function DepositDetail() {
     enabled: !!id, staleTime: 0, refetchOnMount: true,
   });
 
+  const { print } = usePrintDocument();
+
   if (isLoading) return <div className="flex items-center justify-center h-64"><Loader2 className="animate-spin text-blue-500" size={32}/></div>;
   if (!data) return <div className="p-6 text-red-600">Deposit not found.</div>;
 
   const dis = 'w-full border border-slate-200 rounded text-sm px-2 py-1.5 bg-slate-50 text-slate-700 cursor-default';
   const lines: any[] = data.lines || [];
   const totalAmount = Number(data.total_amount || 0);
+
+  const handlePrint = () => {
+    if (!data) return;
+    const hasLines = lines.length > 0;
+    print({
+      title: 'Bank Deposit',
+      number: data.deposit_number,
+      status: data.status ? formatStatus(data.status) : undefined,
+      meta: [
+        { label: 'Deposit Date', value: formatDate(data.deposit_date) },
+        { label: 'Bank Account', value: data.bank_account_name || '-' },
+        { label: 'Reference', value: data.reference || '-' },
+      ],
+      columns: hasLines ? [
+        { label: 'From / Source', value: (l: any) => l.received_from || l.name || l.account_name || '' },
+        { label: 'Account', value: (l: any) => l.account_name || '' },
+        { label: 'Memo', value: (l: any) => l.memo || '' },
+        { label: 'Amount', align: 'right', value: (l: any) => formatCurrency(l.amount) },
+      ] : undefined,
+      rows: hasLines ? lines : undefined,
+      totals: [
+        { label: 'Total', value: formatCurrency(totalAmount), bold: true },
+      ],
+      memo: data.memo,
+    });
+  };
 
   // GL rows: Dr. Bank Account, Cr. each source account
   const glRows = [
@@ -58,6 +90,9 @@ export default function DepositDetail() {
         </div>
         <div className="max-w-screen-xl mx-auto px-8 py-2 flex items-center gap-2">
           <button onClick={() => navigate('/bank/deposits-list')} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Back</button>
+          <EditTransactionButton permKey="deposit" to={`/bank/deposits/${id}/edit`} />
+          <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
+          <DeleteTransactionButton type="bank_deposit" id={id!} listPath="/bank/deposits-list" label={data.deposit_number} />
         </div>
       </div>
 
@@ -131,6 +166,7 @@ export default function DepositDetail() {
                     <tr>
                       <th className="px-3 py-2 text-left font-semibold text-slate-600 w-8">#</th>
                       <th className="px-3 py-2 text-left font-semibold text-slate-600">Account</th>
+                      <th className="px-3 py-2 text-left font-semibold text-slate-600 w-44">Entity</th>
                       <th className="px-3 py-2 text-left font-semibold text-slate-600">Memo</th>
                       <th className="px-3 py-2 text-right font-semibold text-slate-600 w-36">Amount</th>
                       <th className="px-3 py-2 text-left font-semibold text-slate-600 w-28">Department</th>
@@ -138,11 +174,14 @@ export default function DepositDetail() {
                     </tr>
                   </thead>
                   <tbody>
-                    {lines.length===0 ? <tr><td colSpan={6} className="px-3 py-4 text-center text-slate-400 italic">No deposit lines</td></tr>
+                    {lines.length===0 ? <tr><td colSpan={7} className="px-3 py-4 text-center text-slate-400 italic">No deposit lines</td></tr>
                     : lines.map((l:any,i:number)=>(
                       <tr key={l.id||i} className="border-t border-slate-100">
                         <td className="px-3 py-1.5 text-slate-400">{i+1}</td>
                         <td className="px-3 py-1.5 text-slate-700">{l.account_name||'-'}</td>
+                        <td className="px-3 py-1.5 text-slate-600">
+                          {l.entity_name ? <>{l.entity_name}{l.entity_type && <span className="ml-1 text-2xs text-slate-400">({l.entity_type})</span>}</> : '-'}
+                        </td>
                         <td className="px-3 py-1.5 text-slate-600">{l.memo||'-'}</td>
                         <td className="px-3 py-1.5 text-right font-medium text-slate-800">{Number(l.amount).toLocaleString('id-ID',{minimumFractionDigits:2})}</td>
                         <td className="px-3 py-1.5 text-slate-500">{l.department_name||'-'}</td>
@@ -152,7 +191,7 @@ export default function DepositDetail() {
                   </tbody>
                   {lines.length>0 && (
                     <tfoot><tr className="border-t-2 border-slate-300 bg-slate-50 font-semibold">
-                      <td colSpan={3} className="px-3 py-1.5 text-right text-slate-600">Total</td>
+                      <td colSpan={4} className="px-3 py-1.5 text-right text-slate-600">Total</td>
                       <td className="px-3 py-1.5 text-right text-slate-800">{totalAmount.toLocaleString('id-ID',{minimumFractionDigits:2})}</td>
                       <td colSpan={2}/>
                     </tr></tfoot>

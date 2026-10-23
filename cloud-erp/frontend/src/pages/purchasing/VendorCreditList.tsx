@@ -5,6 +5,7 @@ export default function VendorCreditList() {
   return (
     <TransactionListPage
       title="Vendor Credits"
+      permissionKey="vendor_credit"
       iconBg="bg-amber-500" iconText="−"
       endpoint="/api/purchasing/vendor-credits"
       newPath="/purchasing/vendor-credits/new"

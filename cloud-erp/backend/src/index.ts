@@ -23,11 +23,13 @@ import manufacturingRoutes from './modules/manufacturing/manufacturing.routes';
 import accountingRoutes from './modules/accounting/accounting.routes';
 import reportsRoutes from './modules/reports/reports.routes';
 import settingsRoutes from './modules/settings/settings.routes';
+import currencyRoutes from './modules/settings/currency.routes';
 import bankRoutes from './modules/bank/bank.routes';
 import inventoryRoutes from './modules/inventory/inventory.routes';
 import employeeRoutes from './modules/employee/employee.routes';
 import customFormsRoutes from './modules/customforms/customforms.routes';
 import filesRoutes from './modules/files/files.routes';
+import transactionsRoutes from './modules/transactions/transactions.routes';
 
 const app = express();
 const PORT = parseInt(process.env.APP_PORT || '4000');
@@ -89,11 +91,13 @@ app.use('/api/manufacturing', manufacturingRoutes);
 app.use('/api/accounting', accountingRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/settings', currencyRoutes);
 app.use('/api/bank', bankRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/employee', employeeRoutes);
 app.use('/api/custom-forms', customFormsRoutes);
 app.use('/api/files', filesRoutes);
+app.use('/api/transactions', transactionsRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {

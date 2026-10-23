@@ -5,6 +5,7 @@ export default function CreditMemoList() {
   return (
     <TransactionListPage
       title="Credit Memos"
+      permissionKey="credit_memo"
       iconBg="bg-emerald-600" iconText="−"
       endpoint="/api/sales/credit-memos"
       newPath="/sales/credit-memos/new"

@@ -15,6 +15,7 @@ export default function InventoryAdjustmentList() {
   return (
     <TransactionListPage
       title="Inventory Adjustments"
+      permissionKey="inventory_adjustment"
       iconBg="bg-emerald-600"
       iconText="IA"
       endpoint="/api/inventory/adjustments"

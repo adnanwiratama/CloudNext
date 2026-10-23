@@ -5,6 +5,7 @@ export default function ItemList() {
   return (
     <TransactionListPage
       title="Items"
+      permissionKey="item"
       iconBg="bg-indigo-600" iconText="I"
       endpoint="/api/items"
       newPath="/items/new"

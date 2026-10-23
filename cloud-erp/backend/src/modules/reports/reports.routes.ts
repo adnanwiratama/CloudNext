@@ -9,15 +9,50 @@ router.use(authenticate);
 router.get('/dashboard', async (req: Request, res: Response): Promise<void> => {
   try {
     const companyId = req.user!.companyId;
-    const today = new Date().toISOString().split('T')[0];
-    const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
-    const startOfYear = `${new Date().getFullYear()}-01-01`;
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+    const startOfYear = `${now.getFullYear()}-01-01`;
+
+    // ── Period selector (Today / WTD / MTD / QTD / YTD) drives the period KPIs ──
+    const period = String(req.query.period || 'MTD').toUpperCase();
+    const periodStart = (() => {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // local midnight today
+      switch (period) {
+        case 'TODAY': return d;
+        case 'WTD': { // week-to-date, week starts Monday
+          const dow = (d.getDay() + 6) % 7; // 0 = Monday
+          d.setDate(d.getDate() - dow); return d;
+        }
+        case 'QTD': { // quarter-to-date
+          const qStartMonth = Math.floor(now.getMonth() / 3) * 3;
+          return new Date(now.getFullYear(), qStartMonth, 1);
+        }
+        case 'YTD': return new Date(now.getFullYear(), 0, 1);
+        case 'MTD':
+        default:    return new Date(now.getFullYear(), now.getMonth(), 1);
+      }
+    })();
+    const periodStartStr = periodStart.toISOString().split('T')[0];
+    const periodLabels: Record<string, string> = { TODAY: 'Today', WTD: 'Week to date', MTD: 'Month to date', QTD: 'Quarter to date', YTD: 'Year to date' };
+    const periodLabel = periodLabels[period] || 'Month to date';
+
+    // Revenue accounts are stored with account type 'income' in this chart of accounts.
+    const REVENUE_TYPE = 'income';
+
+    // Revenue for the selected period (posted income entries dated within the period).
+    const revenuePeriod = await db('journal_entry_lines as jel')
+      .join('journal_entries as je', 'jel.journal_id', 'je.id')
+      .join('accounts as a', 'jel.account_id', 'a.id')
+      .where({ 'je.company_id': companyId, 'je.status': 'posted', 'a.type': REVENUE_TYPE })
+      .where('je.entry_date', '>=', periodStartStr).where('je.entry_date', '<=', today)
+      .select(db.raw('COALESCE(SUM(jel.credit_base - jel.debit_base), 0) as amount')).first();
 
     // Revenue MTD
     const revenueMTD = await db('journal_entry_lines as jel')
       .join('journal_entries as je', 'jel.journal_id', 'je.id')
       .join('accounts as a', 'jel.account_id', 'a.id')
-      .where({ 'je.company_id': companyId, 'je.status': 'posted', 'a.type': 'revenue' })
+      .where({ 'je.company_id': companyId, 'je.status': 'posted', 'a.type': REVENUE_TYPE })
       .where('je.entry_date', '>=', startOfMonth).where('je.entry_date', '<=', today)
       .select(db.raw('COALESCE(SUM(jel.credit_base - jel.debit_base), 0) as amount')).first();
 
@@ -25,9 +60,26 @@ router.get('/dashboard', async (req: Request, res: Response): Promise<void> => {
     const revenueYTD = await db('journal_entry_lines as jel')
       .join('journal_entries as je', 'jel.journal_id', 'je.id')
       .join('accounts as a', 'jel.account_id', 'a.id')
-      .where({ 'je.company_id': companyId, 'je.status': 'posted', 'a.type': 'revenue' })
+      .where({ 'je.company_id': companyId, 'je.status': 'posted', 'a.type': REVENUE_TYPE })
       .where('je.entry_date', '>=', startOfYear).where('je.entry_date', '<=', today)
       .select(db.raw('COALESCE(SUM(jel.credit_base - jel.debit_base), 0) as amount')).first();
+
+    // ── Period-scoped transaction activity (created/dated within the period) ──
+    // NaN-tolerant sum: some legacy rows store 'NaN' in numeric totals which would
+    // otherwise poison SUM() and serialize to null. Treat NaN as 0.
+    const safeSum = (col: string) => db.raw(`COALESCE(SUM(CASE WHEN ${col} = 'NaN'::numeric THEN 0 ELSE ${col} END), 0) as total`);
+    const soPeriod = await db('sales_orders').where({ company_id: companyId, is_deleted: false })
+      .where('order_date', '>=', periodStartStr).where('order_date', '<=', today)
+      .select(db.raw('COUNT(id) as count'), safeSum('total_amount')).first();
+    const poPeriod = await db('purchase_orders').where({ company_id: companyId, is_deleted: false })
+      .where('order_date', '>=', periodStartStr).where('order_date', '<=', today)
+      .select(db.raw('COUNT(id) as count'), safeSum('total_amount')).first();
+    const invPeriod = await db('invoices').where({ company_id: companyId, is_deleted: false })
+      .where('invoice_date', '>=', periodStartStr).where('invoice_date', '<=', today)
+      .select(db.raw('COUNT(id) as count'), safeSum('total_amount')).first();
+    const billPeriod = await db('vendor_bills').where({ company_id: companyId, is_deleted: false })
+      .where('bill_date', '>=', periodStartStr).where('bill_date', '<=', today)
+      .select(db.raw('COUNT(id) as count'), safeSum('total_amount')).first();
 
     // Open AR
     const openAR = await db('invoices').where({ company_id: companyId, is_deleted: false })
@@ -62,7 +114,7 @@ router.get('/dashboard', async (req: Request, res: Response): Promise<void> => {
     const revenueByMonth = await db('journal_entry_lines as jel')
       .join('journal_entries as je', 'jel.journal_id', 'je.id')
       .join('accounts as a', 'jel.account_id', 'a.id')
-      .where({ 'je.company_id': companyId, 'je.status': 'posted', 'a.type': 'revenue' })
+      .where({ 'je.company_id': companyId, 'je.status': 'posted', 'a.type': REVENUE_TYPE })
       .where('je.entry_date', '>=', db.raw(`CURRENT_DATE - INTERVAL '12 months'`))
       .groupBy(db.raw("TO_CHAR(je.entry_date, 'YYYY-MM')"))
       .orderBy(db.raw("TO_CHAR(je.entry_date, 'YYYY-MM')"))
@@ -98,12 +150,78 @@ router.get('/dashboard', async (req: Request, res: Response): Promise<void> => {
       .orderBy('entry_date', 'desc').limit(10)
       .select('journal_number', 'entry_date', 'memo', 'source_type', 'type');
 
+    // ── Reminders ────────────────────────────────────────────────────────────
+    // Show ONLY pending transactions that are (a) not yet approved, or
+    // (b) not yet completed/finished (still need an action to close them out).
+    const cnt = (r: any) => parseInt((r as any)?.count || 0);
+    const base = (t: string) => db(t).where({ company_id: companyId, is_deleted: false });
+
+    // (a) Pending approval — awaiting sign-off before they can proceed.
+    const soPendingApproval = await base('sales_orders').where('status', 'pending_approval').count('id as count').first();
+    const poPendingApproval = await base('purchase_orders').where('status', 'pending_approval').count('id as count').first();
+    const quotePendingApproval = await base('quotations').whereIn('status', ['draft', 'submitted']).count('id as count').first();
+    // purchase_requisitions has no is_deleted column — query directly.
+    const prPendingApproval = await db('purchase_requisitions').where({ company_id: companyId })
+      .whereIn('status', ['draft', 'submitted']).count('id as count').first();
+
+    // (b) Not completed — in progress, still need fulfillment / receipt / billing / payment.
+    const soToFulfill = await base('sales_orders').where('status', 'pending_fulfillment').count('id as count').first();
+    const soToBill = await base('sales_orders').whereIn('status', ['pending_billing', 'partially_fulfilled', 'partially_billed']).count('id as count').first();
+    const poToReceive = await base('purchase_orders').whereIn('status', ['pending_receipt', 'partially_received']).count('id as count').first();
+    const poToBill = await base('purchase_orders').where('status', 'pending_billing').count('id as count').first();
+    const invUnpaid = await base('invoices').whereIn('status', ['open', 'overdue', 'partially_paid']).count('id as count').first();
+    const invOverdue = await base('invoices').whereIn('status', ['open', 'overdue', 'partially_paid']).where('due_date', '<', today).count('id as count').first();
+    const billUnpaid = await base('vendor_bills').whereIn('status', ['open', 'partially_paid']).count('id as count').first();
+    const woOpen = await base('work_orders').whereNotIn('status', ['completed', 'closed', 'cancelled']).count('id as count').first();
+
+    const reminders = {
+      pendingApproval: [
+        { key: 'so_approval',    count: cnt(soPendingApproval),    label: 'Sales Orders pending approval',       path: '/sales/orders' },
+        { key: 'po_approval',    count: cnt(poPendingApproval),    label: 'Purchase Orders pending approval',    path: '/purchasing/orders' },
+        { key: 'pr_approval',    count: cnt(prPendingApproval),    label: 'Purchase Requisitions pending approval', path: '/purchasing/requisitions' },
+        { key: 'quote_approval', count: cnt(quotePendingApproval), label: 'Quotations pending approval',         path: '/sales/quotations' },
+      ].filter(r => r.count > 0),
+      notCompleted: [
+        { key: 'so_fulfill',  count: cnt(soToFulfill),  label: 'Sales Orders awaiting fulfillment', path: '/sales/orders' },
+        { key: 'so_bill',     count: cnt(soToBill),     label: 'Sales Orders awaiting billing',     path: '/sales/orders' },
+        { key: 'po_receive',  count: cnt(poToReceive),  label: 'Purchase Orders awaiting receipt',  path: '/purchasing/orders' },
+        { key: 'po_bill',     count: cnt(poToBill),     label: 'Purchase Orders awaiting billing',  path: '/purchasing/orders' },
+        { key: 'inv_unpaid',  count: cnt(invUnpaid),    label: 'Invoices awaiting payment',         path: '/sales/invoices', overdue: cnt(invOverdue) },
+        { key: 'bill_unpaid', count: cnt(billUnpaid),   label: 'Vendor Bills awaiting payment',     path: '/purchasing/bills' },
+        { key: 'wo_open',     count: cnt(woOpen),       label: 'Work Orders not completed',         path: '/manufacturing/work-orders' },
+      ].filter(r => r.count > 0),
+    };
+
+    // Pending-approval detail lists for the Approval Queue portlet.
+    const pendingPOList = await db('purchase_orders as po').leftJoin('vendors as v', 'po.vendor_id', 'v.id')
+      .where({ 'po.company_id': companyId, 'po.is_deleted': false, 'po.status': 'pending_approval' })
+      .orderBy('po.order_date', 'desc').limit(5)
+      .select('po.id', 'po.po_number', 'po.total_amount', 'v.name as vendor_name', 'po.order_date');
+    const pendingSOList = await db('sales_orders as so').leftJoin('customers as c', 'so.customer_id', 'c.id')
+      .where({ 'so.company_id': companyId, 'so.is_deleted': false, 'so.status': 'pending_approval' })
+      .orderBy('so.order_date', 'desc').limit(5)
+      .select('so.id', 'so.so_number', 'so.total_amount', 'c.name as customer_name', 'so.order_date');
+
     res.json({
       success: true,
       data: {
+        period,
+        periodLabel,
         kpis: {
+          // Period-scoped activity (reflects the Today/WTD/MTD/QTD/YTD selector).
+          revenuePeriod: parseFloat((revenuePeriod as any)?.amount || 0),
+          soPeriodCount: parseInt((soPeriod as any)?.count || 0),
+          soPeriodTotal: parseFloat((soPeriod as any)?.total || 0),
+          poPeriodCount: parseInt((poPeriod as any)?.count || 0),
+          poPeriodTotal: parseFloat((poPeriod as any)?.total || 0),
+          invPeriodCount: parseInt((invPeriod as any)?.count || 0),
+          invPeriodTotal: parseFloat((invPeriod as any)?.total || 0),
+          billPeriodCount: parseInt((billPeriod as any)?.count || 0),
+          billPeriodTotal: parseFloat((billPeriod as any)?.total || 0),
+          // Fixed-window revenue (kept for reference).
           revenueMTD: parseFloat((revenueMTD as any)?.amount || 0),
           revenueYTD: parseFloat((revenueYTD as any)?.amount || 0),
+          // Point-in-time balances (not period-bounded).
           openAR: parseFloat((openAR as any)?.total || 0),
           openAP: parseFloat((openAP as any)?.total || 0),
           overdueAR: parseFloat((overdueAR as any)?.total || 0),
@@ -116,6 +234,9 @@ router.get('/dashboard', async (req: Request, res: Response): Promise<void> => {
         topCustomers,
         lowStock,
         recentTransactions,
+        reminders,
+        pendingPOList,
+        pendingSOList,
       },
     });
   } catch (e: any) {
@@ -459,6 +580,27 @@ router.get('/so-by-items', async (req: Request, res: Response): Promise<void> =>
   } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: 'Failed to generate report' }); }
 });
 
+// ─── Sales Order by Sales Rep ─────────────────────────────────────────────────
+router.get('/sales-order-by-rep', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const companyId = req.user!.companyId;
+    const { startDate, endDate } = req.query as any;
+    const data = await db('sales_orders as so')
+      .leftJoin('users as u', 'so.created_by', 'u.id')
+      .where({ 'so.company_id': companyId })
+      .modify((q: any) => {
+        if (startDate) q.where('so.order_date', '>=', startDate);
+        if (endDate) q.where('so.order_date', '<=', endDate);
+      })
+      .groupBy('u.id', 'u.name')
+      .select(db.raw('COALESCE(u.name, \'(Unassigned)\') as sales_rep'),
+        db.raw('COUNT(so.id) as order_count'),
+        db.raw('SUM(so.total_amount) as total_amount'))
+      .orderBy(db.raw('SUM(so.total_amount)'), 'desc');
+    res.json({ success: true, data });
+  } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: 'Failed to generate report' }); }
+});
+
 // ─── Purchases by Customer (Vendor) ──────────────────────────────────────────
 router.get('/purchases-by-customer', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -497,8 +639,9 @@ router.get('/purchases-by-items', async (req: Request, res: Response): Promise<v
       .groupBy('it.id', 'it.item_code', 'it.name')
       .select('it.id', 'it.item_code', 'it.name as item_name',
         db.raw('SUM(irl.quantity) as total_qty'),
-        db.raw('SUM(irl.amount) as total_amount'))
-      .orderBy(db.raw('SUM(irl.amount)'), 'desc');
+        // item_receipt_lines has no `amount` column; value = quantity * unit_cost.
+        db.raw('SUM(irl.quantity * COALESCE(irl.unit_cost, 0)) as total_amount'))
+      .orderBy(db.raw('SUM(irl.quantity * COALESCE(irl.unit_cost, 0))'), 'desc');
     res.json({ success: true, data });
   } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: 'Failed to generate report' }); }
 });

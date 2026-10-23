@@ -20,6 +20,10 @@ build/
 **/.env
 !**/.env.example
 
+# ── Runtime uploads (user/customer files; never commit) ──
+uploads/
+**/uploads/
+
 # ── Logs ──
 logs/
 **/logs/

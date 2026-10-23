@@ -67,6 +67,15 @@ export default function WriteChecksForm() {
     enabled: isEdit,
   });
 
+  // Auto-Generated Number config for Write Check (bank_check): tells us whether the
+  // user may enter a manual document number and the next auto-number preview.
+  const { data: numberConfig } = useQuery({
+    queryKey: ['auto-number', 'bank_check'],
+    queryFn: () => api.get('/api/settings/auto-numbers/by-type/bank_check').then(r => r.data.data),
+  });
+  const allowOverride = !!numberConfig?.allowOverride;
+  const numberPreview = numberConfig?.preview || 'To Be Generated';
+
   // ── UI state ───────────────────────────────────────────────────────────────
   const [primaryOpen, setPrimaryOpen] = useState(true);
   const [classOpen,   setClassOpen]   = useState(true);
@@ -218,13 +227,10 @@ export default function WriteChecksForm() {
   // ── Save ───────────────────────────────────────────────────────────────────
   const mutation = useMutation({
     mutationFn: async (data: any) => {
-      // Generate doc number = transaction number on new check
-      if (!isEdit) {
-        const numRes = await api.get('/api/settings/next-number/CH');
-        const docNum = numRes.data.data.formatted;
-        data.documentNumber = docNum;
-        data.checkNumber    = data.checkNumber || docNum;
-      }
+      // The transaction/document number is assigned by the backend per the
+      // Auto-Generated Number setup. Only pass a manual documentNumber when
+      // override is enabled and the user entered one.
+      if (!isEdit && !allowOverride) data.documentNumber = '';
       return isEdit ? api.put(`/api/bank/checks/${id}`, data) : api.post('/api/bank/write-checks', data);
     },
     onSuccess: async (res) => {
@@ -344,9 +350,22 @@ export default function WriteChecksForm() {
                 <div className="space-y-3">
                   <div>
                     <div className="text-xs text-slate-500 mb-0.5">Transaction Number</div>
-                    <div className="text-sm font-medium text-slate-800">
-                      {isEdit ? form.checkNumber : 'To Be Generated'}
-                    </div>
+                    {isEdit ? (
+                      <div className="text-sm font-medium text-slate-800">{form.checkNumber}</div>
+                    ) : allowOverride ? (
+                      <input
+                        type="text"
+                        value={form.documentNumber}
+                        onChange={e => set('documentNumber', e.target.value)}
+                        placeholder="Auto Generated Number"
+                        className="w-full border border-slate-300 rounded text-sm px-2 py-1.5 focus:outline-none focus:border-blue-400"
+                      />
+                    ) : (
+                      <div className="text-sm font-medium text-slate-400 italic">Auto Generated Number</div>
+                    )}
+                    {!isEdit && allowOverride && (
+                      <div className="text-2xs text-slate-400 mt-0.5">Leave blank to auto-generate</div>
+                    )}
                   </div>
                   <div>
                     <label className="block text-xs text-slate-500 mb-1">Account</label>

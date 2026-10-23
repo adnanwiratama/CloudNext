@@ -3,7 +3,7 @@
  * Shows uploaded files, allows attach/download/delete
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import api from '../../services/api';
+import api, { downloadFile, previewFile } from '../../services/api';
 
 interface Props {
   sourceType: string;  // 'bank_check' | 'sales_order' | 'invoice' | etc.
@@ -90,8 +90,8 @@ export default function TransactionFilesTab({ sourceType, sourceId }: Props) {
                       <span className={`inline-flex items-center justify-center w-6 h-6 rounded text-white text-xs font-bold flex-shrink-0 ${color}`}>
                         {ext.toUpperCase().slice(0,3)||'?'}
                       </span>
-                      <a href={`/api/files/${f.id}/preview`} target="_blank" rel="noopener noreferrer"
-                        className="text-blue-600 hover:underline truncate max-w-xs">{f.original_name}</a>
+                      <button onClick={() => previewFile(f.id).catch(() => alert('Failed to open file'))}
+                        className="text-blue-600 hover:underline truncate max-w-xs text-left">{f.original_name}</button>
                     </div>
                   </td>
                   <td className="px-3 py-2 text-slate-700">{f.title||'-'}</td>
@@ -105,12 +105,12 @@ export default function TransactionFilesTab({ sourceType, sourceId }: Props) {
                   </td>
                   <td className="px-3 py-2">
                     <div className="flex items-center justify-center gap-2">
-                      <a href={`/api/files/${f.id}/download`}
+                      <button onClick={() => downloadFile(f.id, f.original_name).catch(() => alert('Failed to download'))}
                         className="flex items-center gap-1 px-2 py-1 text-xs text-blue-600 border border-blue-200 rounded hover:bg-blue-50"
                         title="Download">
                         <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                         Download
-                      </a>
+                      </button>
                       <button onClick={() => handleDelete(f)} className="p-1 text-slate-400 hover:text-red-600 rounded hover:bg-red-50" title="Delete">
                         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
                       </button>

@@ -110,9 +110,12 @@ export class AccountingEngine {
 
     const ffLines = await trx('item_fulfillment_lines as ffl')
       .join('items as i', 'ffl.item_id', 'i.id')
+      .leftJoin('sales_order_lines as sol', 'ffl.so_line_id', 'sol.id')
       .where('ffl.fulfillment_id', fulfillmentId)
       .select('ffl.*', 'i.name as item_name', 'i.item_code',
-        'i.cogs_account_id', 'i.inventory_account_id', 'i.average_cost', 'i.standard_cost');
+        'i.cogs_account_id', 'i.inventory_account_id', 'i.asset_account_id',
+        'i.average_cost', 'i.standard_cost', 'i.last_purchase_price', 'i.purchase_price',
+        'sol.unit_price as so_unit_price');
 
     // Get SO to find company_id
     const so = await trx('sales_orders').where({ id: fulfillment.so_id }).first();
@@ -125,13 +128,20 @@ export class AccountingEngine {
     const jeLines: JournalLine[] = [];
 
     for (const line of ffLines) {
-      const unitCost = parseFloat(line.average_cost || line.standard_cost || '0');
+      // Cost basis fallback: average_cost → standard_cost → last purchase → purchase price → SO line unit price.
+      // (Many demo items carry no recorded cost; without a fallback the COGS JE would be skipped and GL stays empty.)
+      const firstPositive = (...vals: any[]): number => {
+        for (const v of vals) { const n = parseFloat(v || '0'); if (n > 0) return n; }
+        return 0;
+      };
+      const unitCost = firstPositive(line.average_cost, line.standard_cost, line.last_purchase_price, line.purchase_price, line.so_unit_price);
       const cogsAmount = parseFloat(line.quantity) * unitCost;
 
       if (cogsAmount <= 0) continue;
 
+      // Dr = item's COGS account; Cr = item's Inventory account (else Asset account)
       const cogsAccountId = line.cogs_account_id || defaultCOGS;
-      const inventoryAccountId = line.inventory_account_id || defaultFGInventory;
+      const inventoryAccountId = line.inventory_account_id || line.asset_account_id || defaultFGInventory;
 
       if (!cogsAccountId || !inventoryAccountId) continue;
 
@@ -142,12 +152,12 @@ export class AccountingEngine {
         credit: 0,
         memo: `COGS - ${line.item_code} x${line.quantity}`,
       });
-      // Cr. Finished Goods Inventory
+      // Cr. Inventory / Asset
       jeLines.push({
         accountId: inventoryAccountId,
         debit: 0,
         credit: cogsAmount,
-        memo: `FG Out - ${line.item_code} x${line.quantity}`,
+        memo: `Inventory Out - ${line.item_code} x${line.quantity}`,
       });
     }
 
@@ -275,10 +285,13 @@ export class AccountingEngine {
     const receipt = await trx('item_receipts').where({ id: receiptId }).first();
     if (!receipt) throw new AppError('Item receipt not found', 404);
 
+    // Pull PO-line discount so the receipt reflects the discounted (net) inventory value
     const receiptLines = await trx('item_receipt_lines as rl')
       .join('items as i', 'rl.item_id', 'i.id')
+      .leftJoin('purchase_order_lines as pol', 'rl.po_line_id', 'pol.id')
       .where('rl.receipt_id', receiptId)
-      .select('rl.*', 'i.name as item_name', 'i.item_code', 'i.inventory_account_id', 'i.type as item_type');
+      .select('rl.*', 'i.name as item_name', 'i.item_code', 'i.asset_account_id', 'i.inventory_account_id', 'i.type as item_type',
+        'pol.quantity as po_qty', 'pol.discount_amount as po_discount', 'pol.discount_account_id as line_discount_account');
 
     const po = await trx('purchase_orders').where({ id: receipt.po_id }).first();
     const companyId = receipt.company_id || po?.company_id;
@@ -291,36 +304,40 @@ export class AccountingEngine {
     if (!accruedAP) throw new AppError('Accrued AP account (2110) not found. Please add it to Chart of Accounts.', 400);
 
     const jeLines: JournalLine[] = [];
-    let totalReceiptValue = 0;
+    let netTotal = 0;        // Dr Inventory (net) = Cr GRNI
 
     for (const line of receiptLines) {
       const unitCost = parseFloat(line.unit_cost || '0');
-      const lineValue = parseFloat(line.quantity) * unitCost;
+      const recvQty = parseFloat(line.quantity);
+      const gross = recvQty * unitCost;
+      if (gross <= 0) continue;
 
-      if (lineValue <= 0) continue;
+      // Discount proportional to received qty vs ordered qty
+      const poQty = parseFloat(line.po_qty || 0);
+      const poDisc = parseFloat(line.po_discount || 0);
+      const lineDiscount = (poDisc > 0 && poQty > 0) ? Math.round((poDisc * (recvQty / poQty)) * 100) / 100 : 0;
+      const net = gross - lineDiscount;
 
-      // Use item's inventory account or default
-      const inventoryAccountId = line.inventory_account_id || defaultInventory;
-      if (!inventoryAccountId) continue;
+      const debitAccountId = line.asset_account_id || line.inventory_account_id || defaultInventory;
+      if (!debitAccountId) continue;
 
-      totalReceiptValue += lineValue;
-
-      // Dr. Inventory
+      // Dr. Inventory at NET value (after discount)
       jeLines.push({
-        accountId: inventoryAccountId,
-        debit: lineValue,
+        accountId: debitAccountId,
+        debit: net,
         credit: 0,
-        memo: `Inventory In - ${line.item_code} x${line.quantity} @ ${unitCost}`,
+        memo: `Inventory In - ${line.item_code} x${recvQty} @ ${unitCost}${lineDiscount > 0 ? ` (net of disc ${lineDiscount})` : ''}`,
       });
+      netTotal += net;
     }
 
-    if (jeLines.length === 0 || totalReceiptValue <= 0) return;
+    if (jeLines.length === 0 || netTotal <= 0) return;
 
-    // Cr. Accrued AP (GR-IR) - single line for total
+    // Cr. Accrued AP (GR-IR) - net value (matches inventory debit)
     jeLines.push({
       accountId: accruedAP,
       debit: 0,
-      credit: totalReceiptValue,
+      credit: netTotal,
       entityVendorId: receipt.vendor_id || po?.vendor_id,
       memo: `Accrued AP - GRN ${receipt.receipt_number}`,
     });
@@ -335,6 +352,11 @@ export class AccountingEngine {
       createdBy: userId,
       trx,
     });
+
+    // Mark the receipt as GL-posted so the list reflects "Posted".
+    if (await trx.schema.hasColumn('item_receipts', 'is_posted')) {
+      await trx('item_receipts').where({ id: receiptId }).update({ is_posted: true });
+    }
   }
 
   // ─── TASK 4: Vendor Bill GL (3-way match clearing) ────────────────────────────
@@ -363,15 +385,16 @@ export class AccountingEngine {
     if (!accruedAP) throw new AppError('Accrued AP account (2110) not found.', 400);
 
     const subtotal = parseFloat(bill.subtotal || '0');
+    const discountAmount = parseFloat(bill.discount_amount || '0');
+    const netSubtotal = subtotal - discountAmount;   // matches the receipt's net GR-IR accrual
     const taxAmount = parseFloat(bill.tax_amount || '0');
-    const totalAmount = parseFloat(bill.total_amount || '0');
 
     const jeLines: JournalLine[] = [];
 
-    // Dr. Accrued AP / GR-IR (clears the GRN accrual)
+    // Dr. Accrued AP / GR-IR (clears the GRN net accrual)
     jeLines.push({
       accountId: accruedAP,
-      debit: subtotal,
+      debit: netSubtotal,
       credit: 0,
       entityVendorId: bill.vendor_id,
       memo: `Clear GR-IR - ${bill.vendor_name} (${bill.bill_number})`,
@@ -379,7 +402,10 @@ export class AccountingEngine {
 
     // Dr. Tax Input / PPN Masukan (if applicable)
     if (taxAmount > 0) {
-      const taxInputAccount = await AccountingEngine.getDefaultAccount(bill.company_id, '1150', trx);
+      const taxInputRow = await trx('accounts').where({ company_id: bill.company_id, subtype: 'tax_receivable' }).orderBy('code').first();
+      const taxInputAccount = taxInputRow?.id
+        || await AccountingEngine.getDefaultAccount(bill.company_id, '2220', trx)
+        || await AccountingEngine.getDefaultAccount(bill.company_id, '1150', trx);
       if (taxInputAccount) {
         jeLines.push({
           accountId: taxInputAccount,
@@ -393,11 +419,12 @@ export class AccountingEngine {
       }
     }
 
-    // Cr. Accounts Payable (formal AP obligation)
+    // Cr. Accounts Payable = sum of debits (net accrual + tax) to keep the entry balanced
+    const apCredit = jeLines.reduce((s, l) => s + (l.debit || 0), 0);
     jeLines.push({
       accountId: apAccountId,
       debit: 0,
-      credit: totalAmount,
+      credit: apCredit,
       entityVendorId: bill.vendor_id,
       memo: `AP - ${bill.vendor_name} (${bill.bill_number})`,
     });

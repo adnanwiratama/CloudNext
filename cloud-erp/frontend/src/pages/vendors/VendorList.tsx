@@ -4,6 +4,7 @@ export default function VendorList() {
   return (
     <TransactionListPage
       title="Vendors"
+      permissionKey="vendor"
       iconBg="bg-orange-600" iconText="V"
       endpoint="/api/vendors"
       newPath="/vendors/new"

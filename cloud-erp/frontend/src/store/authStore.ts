@@ -16,6 +16,7 @@ export interface User {
   isAdmin: boolean;
   timezone: string;
   language: string;
+  env?: 'prod' | 'sandbox';
   permissions: Array<{ module: string; resource: string; action: string }>;
 }
 

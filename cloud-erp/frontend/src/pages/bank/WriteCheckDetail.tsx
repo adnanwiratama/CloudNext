@@ -3,6 +3,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronUp, ChevronDown, Loader2, Printer, CheckCircle2 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
+import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
+import EditTransactionButton from '../../components/transaction/EditTransactionButton';
 
 export default function WriteCheckDetail() {
   const { id }     = useParams<{ id: string }>();
@@ -157,8 +159,9 @@ export default function WriteCheckDetail() {
         </div>
         <div className="max-w-screen-xl mx-auto px-8 py-2 flex items-center gap-2">
           <button onClick={() => navigate(-1)} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Back</button>
-          <button onClick={() => navigate(`/bank/checks/${id}/edit`)} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Edit</button>
+          <EditTransactionButton permKey="check" to={`/bank/checks/${id}/edit`} />
           <button onClick={handlePrint} className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-700 text-white text-sm font-medium rounded hover:bg-blue-800"><Printer size={13}/> Print</button>
+          <DeleteTransactionButton type="bank_check" id={id!} listPath="/bank/checks-list" label={data.check_number} />
         </div>
       </div>
 
@@ -568,7 +571,7 @@ export default function WriteCheckDetail() {
         {/* Bottom */}
         <div className="bg-white border border-slate-200 rounded shadow-sm px-4 py-2.5 flex items-center gap-2">
           <button onClick={() => navigate(-1)} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Back</button>
-          <button onClick={() => navigate(`/bank/checks/${id}/edit`)} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Edit</button>
+          <EditTransactionButton permKey="check" to={`/bank/checks/${id}/edit`} />
           <button onClick={handlePrint} className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-700 text-white text-sm font-medium rounded hover:bg-blue-800"><Printer size={13}/> Print</button>
         </div>
 

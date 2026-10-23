@@ -29,6 +29,7 @@ export default function InvoiceList() {
       newPath="/sales/invoices/new"
       detailPath={r => `/sales/invoices/${r.id}`}
       columns={columns}
+      permissionKey="invoice"
       numberField="invoice_number"
       dateField="invoice_date"
       memoField="customer_name"

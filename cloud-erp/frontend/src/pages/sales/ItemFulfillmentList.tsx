@@ -18,6 +18,7 @@ export default function ItemFulfillmentList() {
   return (
     <TransactionListPage
       title="Item Fulfillments"
+      permissionKey="item_fulfillment"
       iconBg="bg-blue-600"
       iconText="IF"
       endpoint="/api/sales/fulfillments"

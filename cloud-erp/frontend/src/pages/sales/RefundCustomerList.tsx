@@ -5,6 +5,7 @@ export default function RefundCustomerList() {
   return (
     <TransactionListPage
       title="Customer Refunds"
+      permissionKey="customer_refund"
       iconBg="bg-amber-500" iconText="↩"
       endpoint="/api/sales/refunds"
       newPath="/sales/refunds/new"

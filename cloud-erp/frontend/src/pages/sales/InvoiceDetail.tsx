@@ -4,10 +4,13 @@ import { ChevronUp, ChevronDown, DollarSign, Printer, Loader2, CheckCircle2, Fil
 import { useState, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
-import { formatCurrency, formatDate, formatNumber } from '../../utils/format';
+import { formatCurrency, formatDate, formatNumber, formatStatus } from '../../utils/format';
 import TransactionLink from '../../components/common/TransactionLink';
 import TransactionFilesTab from '../../components/transaction/TransactionFilesTab';
 import TransactionSysInfoTab from '../../components/transaction/TransactionSysInfoTab';
+import { usePrintDocument } from '../../hooks/usePrintDocument';
+import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
+import EditTransactionButton from '../../components/transaction/EditTransactionButton';
 
 export default function InvoiceDetail() {
   const { id } = useParams<{ id: string }>();
@@ -27,6 +30,43 @@ export default function InvoiceDetail() {
     queryFn: () => api.get(`/api/sales/invoices/${id}`).then(r => r.data.data),
     enabled: !!id, staleTime: 0, refetchOnMount: true,
   });
+
+  const { print } = usePrintDocument();
+  const handlePrint = () => {
+    if (!inv) return;
+    print({
+      title: 'Invoice',
+      number: inv.invoice_number,
+      status: formatStatus(inv.status),
+      partyLabel: 'Customer',
+      partyName: inv.customer_name,
+      partyLines: [inv.billing_address, inv.customer_email].filter(Boolean),
+      meta: [
+        { label: 'Invoice Date', value: formatDate(inv.invoice_date) },
+        { label: 'Due Date', value: inv.due_date ? formatDate(inv.due_date) : '-' },
+        { label: 'Payment Terms', value: inv.payment_terms || '-' },
+        { label: 'Currency', value: inv.currency || '-' },
+      ],
+      columns: [
+        { label: 'Item', value: (r: any) => `${r.item_code || ''} ${r.item_name || ''}`.trim() },
+        { label: 'Description', value: (r: any) => r.description || '' },
+        { label: 'Qty', align: 'right', value: (r: any) => formatNumber(r.quantity, 2) },
+        { label: 'Unit', value: (r: any) => r.uom_code || r.uom_name || '' },
+        { label: 'Unit Price', align: 'right', value: (r: any) => formatCurrency(r.unit_price) },
+        { label: 'Tax', align: 'right', value: (r: any) => (Number(r.tax_amount) > 0 ? formatCurrency(r.tax_amount) : '-') },
+        { label: 'Amount', align: 'right', value: (r: any) => formatCurrency(r.amount) },
+      ],
+      rows: inv.lines || [],
+      totals: [
+        { label: 'Subtotal', value: formatCurrency(inv.subtotal) },
+        { label: 'Tax', value: formatCurrency(inv.tax_amount || (inv.lines || []).reduce((s: number, l: any) => s + Number(l.tax_amount || 0), 0)) },
+        { label: 'Total', value: formatCurrency(inv.total_amount), bold: true },
+        ...(inv.amount_paid != null ? [{ label: 'Amount Paid', value: formatCurrency(inv.amount_paid) }] : []),
+        ...(inv.amount_due != null ? [{ label: 'Amount Due', value: formatCurrency(inv.amount_due) }] : []),
+      ],
+      memo: inv.memo,
+    });
+  };
 
   if (isLoading) return <div className="flex items-center justify-center h-64"><Loader2 className="animate-spin text-blue-500" size={32}/></div>;
   if (!inv) return <div className="p-6 text-red-600">Invoice not found.</div>;
@@ -53,14 +93,15 @@ export default function InvoiceDetail() {
         </div>
         <div className="max-w-screen-xl mx-auto px-4 py-2 flex items-center gap-2 flex-wrap">
           <button onClick={() => navigate('/sales/invoices')} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Back</button>
-          <button onClick={() => navigate(`/sales/invoices/${id}/edit`)} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Edit</button>
-          <button className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
+          <EditTransactionButton permKey="invoice" to={`/sales/invoices/${id}/edit`} />
+          <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
           {!['paid','voided'].includes(inv.status) && parseFloat(inv.amount_due)>0 && (
             <button onClick={() => navigate(`/sales/payments/new?customerId=${inv.customer_id}&invoiceId=${id}&amount=${inv.amount_due}`)}
               className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white text-sm rounded hover:bg-emerald-700">
               <DollarSign size={13}/> Create Payment
             </button>
           )}
+          <DeleteTransactionButton type="invoice" id={id!} listPath="/sales/invoices" label={inv.invoice_number} />
         </div>
       </div>
 
@@ -80,23 +121,33 @@ export default function InvoiceDetail() {
           {primaryOpen && (
             <div className="px-4 pb-5 border-t border-slate-100">
               <div className="grid grid-cols-3 gap-x-10 gap-y-4 mt-4">
+                {/* Column 1 */}
                 <div className="space-y-3">
                   <div><div className="text-xs text-slate-500 mb-0.5">Invoice Number</div><div className="text-sm font-medium text-blue-700 font-mono">{inv.invoice_number}</div></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Customer</label><input readOnly value={inv.customer_name||''} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Invoice Date</label><input readOnly value={inv.invoice_date?.split('T')[0]||''} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Due Date</label><input readOnly value={inv.due_date?.split('T')[0]||''} className={`${dis} ${new Date(inv.due_date)<new Date()&&inv.status!=='paid'?'text-red-600 border-red-300':''}`}/></div>
                 </div>
+                {/* Column 2 */}
                 <div className="space-y-3">
-                  <div><label className="block text-xs text-slate-500 mb-1">Amount</label><input readOnly value={Number(inv.total_amount||0).toLocaleString('id-ID',{minimumFractionDigits:2})} className={dis}/></div>
-                  <div><label className="block text-xs text-slate-500 mb-1">Tax</label><input readOnly value={totalTax.toLocaleString('id-ID',{minimumFractionDigits:2})} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Amount Paid</label><input readOnly value={Number(inv.amount_paid||0).toLocaleString('id-ID',{minimumFractionDigits:2})} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Balance Due</label><input readOnly value={Number(inv.amount_due||0).toLocaleString('id-ID',{minimumFractionDigits:2})} className={`${dis} ${parseFloat(inv.amount_due)>0?'text-red-600 font-medium':''}`}/></div>
-                </div>
-                <div className="space-y-3">
-                  <div><label className="block text-xs text-slate-500 mb-1">Currency</label><input readOnly value={inv.currency||''} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Payment Terms</label><input readOnly value={inv.payment_terms||''} className={dis}/></div>
-                  <div><label className="block text-xs text-slate-500 mb-1">Department</label><input readOnly value={inv.department_name||''} className={dis}/></div>
+                  <div><label className="block text-xs text-slate-500 mb-1">Currency</label><input readOnly value={inv.currency||''} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Memo</label><input readOnly value={inv.memo||''} className={dis}/></div>
+                </div>
+                {/* Column 3 — Summary */}
+                <div className="space-y-3">
+                  <div className="border border-slate-200 rounded overflow-hidden">
+                    <div className="bg-slate-600 text-white text-xs font-semibold px-3 py-1.5">Summary</div>
+                    <div className="text-sm">
+                      <div className="flex justify-between px-3 py-1.5 border-b border-slate-100"><span className="text-slate-600">Subtotal</span><span>{formatCurrency(inv.subtotal)}</span></div>
+                      <div className="flex justify-between px-3 py-1.5 border-b border-slate-100"><span className="text-slate-600">Discount</span><span className="text-amber-600">{formatCurrency(inv.discount_amount)}</span></div>
+                      <div className="flex justify-between px-3 py-1.5 border-b border-slate-100"><span className="text-slate-600">Tax</span><span>{formatCurrency(inv.tax_amount || totalTax)}</span></div>
+                      {Number(inv.shipping_amount) > 0 && <div className="flex justify-between px-3 py-1.5 border-b border-slate-100"><span className="text-slate-600">Shipping</span><span>{formatCurrency(inv.shipping_amount)}</span></div>}
+                      <div className="flex justify-between px-3 py-1.5 font-bold bg-slate-50"><span>Total</span><span>{formatCurrency(inv.total_amount)}</span></div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -140,7 +191,9 @@ export default function InvoiceDetail() {
                         <th className="px-3 py-2 text-left font-semibold text-slate-600">Item</th>
                         <th className="px-3 py-2 text-left font-semibold text-slate-600">Description</th>
                         <th className="px-3 py-2 text-right font-semibold text-slate-600 w-20">Qty</th>
+                        <th className="px-3 py-2 text-left font-semibold text-slate-600 w-20">Unit</th>
                         <th className="px-3 py-2 text-right font-semibold text-slate-600 w-32">Unit Price</th>
+                        <th className="px-3 py-2 text-left font-semibold text-slate-600 w-28">Tax Code</th>
                         <th className="px-3 py-2 text-right font-semibold text-slate-600 w-28">Tax</th>
                         <th className="px-3 py-2 text-right font-semibold text-slate-600 w-32">Amount</th>
                         <th className="px-3 py-2 text-left font-semibold text-slate-600 w-28">Department</th>
@@ -148,14 +201,16 @@ export default function InvoiceDetail() {
                       </tr>
                     </thead>
                     <tbody>
-                      {(inv.lines||[]).length===0 ? <tr><td colSpan={9} className="px-3 py-4 text-center text-slate-400 italic">No items</td></tr>
+                      {(inv.lines||[]).length===0 ? <tr><td colSpan={11} className="px-3 py-4 text-center text-slate-400 italic">No items</td></tr>
                       : (inv.lines||[]).map((l:any,i:number)=>(
                         <tr key={l.id} className="border-t border-slate-100">
                           <td className="px-3 py-1.5 text-slate-400">{l.line_number||i+1}</td>
                           <td className="px-3 py-1.5"><span className="font-mono text-xs text-blue-600">{l.item_code}</span><div className="text-xs text-slate-600">{l.item_name}</div></td>
                           <td className="px-3 py-1.5 text-slate-500 text-xs">{l.description||'-'}</td>
                           <td className="px-3 py-1.5 text-right">{formatNumber(l.quantity,2)}</td>
+                          <td className="px-3 py-1.5 text-slate-600">{l.uom_code||l.uom_name||'-'}</td>
                           <td className="px-3 py-1.5 text-right">{formatCurrency(l.unit_price)}</td>
+                          <td className="px-3 py-1.5 text-slate-500">{l.tax_code||'-'}</td>
                           <td className="px-3 py-1.5 text-right">{formatCurrency(l.tax_amount)}</td>
                           <td className="px-3 py-1.5 text-right font-medium">{formatCurrency(l.amount)}</td>
                           <td className="px-3 py-1.5 text-slate-500">{l.department_name||'-'}</td>
@@ -166,7 +221,7 @@ export default function InvoiceDetail() {
                     {(inv.lines||[]).length>0 && (
                       <tfoot>
                         <tr className="border-t-2 border-slate-300 bg-slate-50 font-semibold">
-                          <td colSpan={6} className="px-3 py-1.5 text-right text-slate-600">Total</td>
+                          <td colSpan={8} className="px-3 py-1.5 text-right text-slate-600">Total</td>
                           <td className="px-3 py-1.5 text-right">{formatCurrency(inv.total_amount)}</td>
                           <td colSpan={2}/>
                         </tr>

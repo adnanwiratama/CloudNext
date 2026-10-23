@@ -2,6 +2,7 @@ import { useState, useEffect, ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import api from '../../services/api';
 import { Loader2, ChevronLeft, ChevronRight, Download, Printer, FileText } from 'lucide-react';
+import { usePermissions } from '../../hooks/usePermissions';
 
 export interface ListColumn {
   key: string;
@@ -24,16 +25,26 @@ interface Props {
   dateField: string;              // field holding the date (for filter + sort)
   memoField?: string;             // field holding memo/party (for text filter)
   statusOptions?: string[];       // status filter options
+  extraFilter?: {                 // optional extra dropdown filter (e.g. Type)
+    label: string;
+    field: string;                // row field to match against
+    options: { value: string; label: string }[]; // value '' = all
+  };
+  permissionKey?: string;         // role-matrix key for gating New/Edit (e.g. 'purchase_order')
 }
 
 export default function TransactionListPage(props: Props) {
   const {
     title, iconBg = 'bg-teal-600', iconText = '✓',
     endpoint, newPath, detailPath, editPath, columns,
-    numberField, dateField, memoField, statusOptions = ['- All -'],
+    numberField, dateField, memoField, statusOptions = ['- All -'], extraFilter, permissionKey,
   } = props;
 
   const navigate = useNavigate();
+  const { canView, canCreate, canEdit } = usePermissions();
+  const allowView = !permissionKey || canView(permissionKey);
+  const allowNew = !permissionKey || canCreate(permissionKey);
+  const allowEdit = !permissionKey || canEdit(permissionKey);
   const [rows, setRows] = useState<any[]>([]);
   const [filtered, setFiltered] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -43,6 +54,7 @@ export default function TransactionListPage(props: Props) {
   const [fDocNum, setFDocNum] = useState('');
   const [fMemo, setFMemo] = useState('');
   const [fStatus, setFStatus] = useState('- All -');
+  const [fExtra, setFExtra] = useState('');
   const [fDateFrom, setFDateFrom] = useState('');
   const [fDateTo, setFDateTo] = useState('');
   const [sortBy, setSortBy] = useState('Recently Created');
@@ -57,6 +69,7 @@ export default function TransactionListPage(props: Props) {
     if (fDocNum) data = data.filter(r => String(r[numberField] || '').toLowerCase().includes(fDocNum.toLowerCase()));
     if (fMemo && memoField) data = data.filter(r => String(r[memoField] || '').toLowerCase().includes(fMemo.toLowerCase()));
     if (fStatus && fStatus !== '- All -') data = data.filter(r => r.status === fStatus);
+    if (extraFilter && fExtra) data = data.filter(r => String(r[extraFilter.field] ?? '') === fExtra);
     if (fDateFrom) data = data.filter(r => new Date(r[dateField]) >= new Date(fDateFrom));
     if (fDateTo) data = data.filter(r => new Date(r[dateField]) <= new Date(fDateTo));
 
@@ -66,7 +79,7 @@ export default function TransactionListPage(props: Props) {
 
     setFiltered(data);
     setPage(1);
-  }, [rows, fDocNum, fMemo, fStatus, fDateFrom, fDateTo, sortBy]);
+  }, [rows, fDocNum, fMemo, fStatus, fExtra, fDateFrom, fDateTo, sortBy]);
 
   const fetchRows = async () => {
     try {
@@ -81,10 +94,24 @@ export default function TransactionListPage(props: Props) {
     }
   };
 
-  const clearFilters = () => { setFDocNum(''); setFMemo(''); setFStatus('- All -'); setFDateFrom(''); setFDateTo(''); };
+  const clearFilters = () => { setFDocNum(''); setFMemo(''); setFStatus('- All -'); setFExtra(''); setFDateFrom(''); setFDateTo(''); };
 
   const totalPages = Math.ceil(filtered.length / PER_PAGE);
   const paginated = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+
+  if (!allowView) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <div className="bg-white border border-slate-200 rounded shadow-sm p-8 max-w-md text-center">
+          <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center mx-auto mb-4">
+            <FileText className="text-red-400" size={24} />
+          </div>
+          <h2 className="text-lg font-semibold text-slate-800 mb-1">Akses Ditolak</h2>
+          <p className="text-sm text-slate-500">Anda tidak memiliki izin untuk melihat {title}.</p>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) return <div className="flex items-center justify-center h-64"><Loader2 className="animate-spin text-blue-500" size={32} /></div>;
 
@@ -104,10 +131,12 @@ export default function TransactionListPage(props: Props) {
           </div>
         </div>
         <div className="max-w-screen-xl mx-auto px-8 py-2 flex items-center gap-2">
-          <button onClick={() => navigate(newPath)}
-            className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-700 text-white text-sm font-medium rounded hover:bg-blue-800 transition-colors">
-            New Transaction
-          </button>
+          {allowNew && (
+            <button onClick={() => navigate(newPath)}
+              className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-700 text-white text-sm font-medium rounded hover:bg-blue-800 transition-colors">
+              New Transaction
+            </button>
+          )}
         </div>
       </div>
 
@@ -143,6 +172,15 @@ export default function TransactionListPage(props: Props) {
                     <select value={fStatus} onChange={e => setFStatus(e.target.value)}
                       className="w-full border border-slate-300 rounded text-sm px-2 py-1.5 focus:outline-none focus:border-blue-400 bg-white">
                       {statusOptions.map(s => <option key={s}>{s}</option>)}
+                    </select>
+                  </div>
+                )}
+                {extraFilter && (
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">{extraFilter.label}</label>
+                    <select value={fExtra} onChange={e => setFExtra(e.target.value)}
+                      className="w-full border border-slate-300 rounded text-sm px-2 py-1.5 focus:outline-none focus:border-blue-400 bg-white">
+                      {extraFilter.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                     </select>
                   </div>
                 )}
@@ -201,15 +239,14 @@ export default function TransactionListPage(props: Props) {
                     <td colSpan={columns.length + 1} className="px-4 py-16 text-center">
                       <FileText className="mx-auto mb-3 text-slate-300" size={40} />
                       <p className="text-sm text-slate-500 mb-2">No records found</p>
-                      <button onClick={() => navigate(newPath)} className="text-blue-600 hover:underline text-sm">Create your first record</button>
+                      {allowNew && <button onClick={() => navigate(newPath)} className="text-blue-600 hover:underline text-sm">Create your first record</button>}
                     </td>
                   </tr>
                 ) : (
                   paginated.map(row => (
                     <tr key={row.id} className="border-t border-slate-100 hover:bg-slate-50 transition-colors">
                       <td className="px-3 py-2 text-xs whitespace-nowrap">
-                        <Link to={editPath ? editPath(row) : detailPath(row)} className="text-blue-600 hover:underline">Edit</Link>
-                        <span className="text-slate-400 mx-1">|</span>
+                        {allowEdit && <><Link to={editPath ? editPath(row) : detailPath(row)} className="text-blue-600 hover:underline">Edit</Link><span className="text-slate-400 mx-1">|</span></>}
                         <Link to={detailPath(row)} className="text-blue-600 hover:underline">View</Link>
                       </td>
                       {columns.map(c => (

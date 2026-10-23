@@ -5,6 +5,7 @@ export default function VendorReturnList() {
   return (
     <TransactionListPage
       title="Vendor Returns"
+      permissionKey="vendor_return"
       iconBg="bg-red-600" iconText="↩"
       endpoint="/api/purchasing/vendor-returns"
       newPath="/purchasing/vendor-returns/new"

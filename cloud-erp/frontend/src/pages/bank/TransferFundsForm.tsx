@@ -5,6 +5,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import api from '../../services/api';
 import { useFormOptions } from '../../hooks/useFormOptions';
 import TransactionFileUploadRow, { FileRow, uploadFileRows } from '../../components/transaction/TransactionFileUploadRow';
+import { formatCurrency } from '../../utils/format';
 import toast from 'react-hot-toast';
 
 export default function TransferFundsForm() {
@@ -25,6 +26,33 @@ export default function TransferFundsForm() {
     reference: '', memo: '', locationId: '', departmentId: '', subsidiaryId: '',
   });
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
+
+  // Live balance for the selected From / To accounts (fallback to net_balance from options).
+  const { data: fromBalData } = useQuery({
+    queryKey: ['account-balance', form.fromAccountId],
+    queryFn: () => api.get(`/api/accounting/accounts/${form.fromAccountId}/balance`).then(r => r.data.data?.balance ?? 0),
+    enabled: !!form.fromAccountId, staleTime: 10000,
+  });
+  const { data: toBalData } = useQuery({
+    queryKey: ['account-balance', form.toAccountId],
+    queryFn: () => api.get(`/api/accounting/accounts/${form.toAccountId}/balance`).then(r => r.data.data?.balance ?? 0),
+    enabled: !!form.toAccountId, staleTime: 10000,
+  });
+  const balanceOf = (accountId: string, live: any): number | null => {
+    if (!accountId) return null;
+    if (live != null) return Number(live);
+    const a = accounts.find((x: any) => x.id === accountId);
+    return a ? Number(a.net_balance ?? 0) : 0;
+  };
+  const fromBalance = balanceOf(form.fromAccountId, fromBalData);
+  const toBalance   = balanceOf(form.toAccountId, toBalData);
+
+  const BalanceHint = ({ bal }: { bal: number | null }) => bal == null ? null : (
+    <div className="mt-1.5 text-xs flex items-center gap-1.5">
+      <span className="text-slate-500">Current Balance:</span>
+      <span className={`font-semibold ${bal < 0 ? 'text-red-600' : 'text-emerald-700'}`}>{formatCurrency(bal)}</span>
+    </div>
+  );
 
   const mutation = useMutation({
     mutationFn: (data: any) => api.post('/api/bank/transfers', data),
@@ -95,17 +123,15 @@ export default function TransferFundsForm() {
                   <div><label className="block text-xs text-slate-500 mb-1">From Account <span className="text-red-500">*</span></label>
                     <select value={form.fromAccountId} onChange={e=>set('fromAccountId',e.target.value)} className={sel}>
                       <option value="">-- Select Account --</option>{bankAccounts.map((a:any)=><option key={a.id} value={a.id}>{a.code} - {a.name}</option>)}
-                    </select></div>
+                    </select>
+                    <BalanceHint bal={fromBalance}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">To Account <span className="text-red-500">*</span></label>
                     <select value={form.toAccountId} onChange={e=>set('toAccountId',e.target.value)} className={sel}>
                       <option value="">-- Select Account --</option>{bankAccounts.map((a:any)=><option key={a.id} value={a.id}>{a.code} - {a.name}</option>)}
-                    </select></div>
+                    </select>
+                    <BalanceHint bal={toBalance}/></div>
                 </div>
                 <div className="space-y-3">
-                  <div><label className="block text-xs text-slate-500 mb-1">Location</label>
-                    <select value={form.locationId} onChange={e=>set('locationId',e.target.value)} className={sel}><option value="">--</option>{departments.map((l:any)=><option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
-                  <div><label className="block text-xs text-slate-500 mb-1">Department</label>
-                    <select value={form.departmentId} onChange={e=>set('departmentId',e.target.value)} className={sel}><option value="">--</option>{departments.map((d:any)=><option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Memo</label>
                     <input value={form.memo} onChange={e=>set('memo',e.target.value)} className={dis} placeholder="Purpose of transfer"/></div>
                 </div>
@@ -127,7 +153,7 @@ export default function TransferFundsForm() {
                 <div><label className="block text-xs text-slate-500 mb-1">Department</label>
                   <select value={form.departmentId} onChange={e=>set('departmentId',e.target.value)} className={sel}><option value="">--</option>{departments.map((d:any)=><option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
                 <div><label className="block text-xs text-slate-500 mb-1">Location</label>
-                  <select value={form.locationId} onChange={e=>set('locationId',e.target.value)} className={sel}><option value="">--</option>{departments.map((l:any)=><option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+                  <select value={form.locationId} onChange={e=>set('locationId',e.target.value)} className={sel}><option value="">--</option>{locations.map((l:any)=><option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
               </div>
             </div>
           )}

@@ -1,10 +1,13 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronUp, ChevronDown, Loader2, CheckCircle2, ArrowRight } from 'lucide-react';
+import { ChevronUp, ChevronDown, Loader2, CheckCircle2, ArrowRight, Printer } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
+import { formatCurrency, formatDate, formatStatus } from '../../utils/format';
 import TransactionFilesTab from '../../components/transaction/TransactionFilesTab';
 import TransactionSysInfoTab from '../../components/transaction/TransactionSysInfoTab';
+import { usePrintDocument } from '../../hooks/usePrintDocument';
+import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
 
 export default function TransferDetail() {
   const { id } = useParams<{ id: string }>();
@@ -25,11 +28,32 @@ export default function TransferDetail() {
     enabled: !!id, staleTime: 0, refetchOnMount: true,
   });
 
+  const { print } = usePrintDocument();
+
   if (isLoading) return <div className="flex items-center justify-center h-64"><Loader2 className="animate-spin text-blue-500" size={32}/></div>;
   if (!data) return <div className="p-6 text-red-600">Transfer not found.</div>;
 
   const dis = 'w-full border border-slate-200 rounded text-sm px-2 py-1.5 bg-slate-50 text-slate-700 cursor-default';
   const amount = Number(data.amount || 0);
+
+  const handlePrint = () => {
+    if (!data) return;
+    print({
+      title: 'Bank Transfer',
+      number: data.transfer_number,
+      status: data.status ? formatStatus(data.status) : undefined,
+      partyLabel: 'From → To',
+      partyName: `${data.from_account_name || '-'} → ${data.to_account_name || '-'}`,
+      meta: [
+        { label: 'Transfer Date', value: formatDate(data.transfer_date) },
+        { label: 'Reference', value: data.reference || '-' },
+      ],
+      totals: [
+        { label: 'Total', value: formatCurrency(amount), bold: true },
+      ],
+      memo: data.memo,
+    });
+  };
 
   // GL: Dr. To Account, Cr. From Account
   const glRows = [
@@ -57,6 +81,8 @@ export default function TransferDetail() {
         </div>
         <div className="max-w-screen-xl mx-auto px-8 py-2 flex items-center gap-2">
           <button onClick={() => navigate('/bank/transfers-list')} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Back</button>
+          <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
+          <DeleteTransactionButton type="bank_transfer" id={id!} listPath="/bank/transfers-list" label={data.transfer_number} />
         </div>
       </div>
 

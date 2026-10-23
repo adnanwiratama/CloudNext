@@ -1,6 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import db from '../config/database';
+import { Knex } from 'knex';
+import db, { runWithDb } from '../config/database';
+import { getEnvDb, DbEnv } from '../config/envDb';
 
 export interface AuthUser {
   id: string;
@@ -16,6 +18,9 @@ declare global {
   namespace Express {
     interface Request {
       user?: AuthUser;
+      // Environment-aware DB connection resolved per request (Option C).
+      dbEnv?: DbEnv;
+      db?: Knex;
     }
   }
 }
@@ -31,7 +36,14 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret') as any;
 
-    const user = await db('users')
+    // Resolve the environment carried in the token ('prod' | 'sandbox') and
+    // attach the matching DB connection for this request.
+    const env: DbEnv = decoded.env === 'sandbox' ? 'sandbox' : 'prod';
+    const edb = getEnvDb(env);
+    req.dbEnv = env;
+    req.db = edb;
+
+    const user = await edb('users')
       .where({ id: decoded.userId, is_active: true })
       .first();
 
@@ -50,7 +62,9 @@ export const authenticate = async (req: Request, res: Response, next: NextFuncti
       subsidiaryId: user.subsidiary_id,
     };
 
-    next();
+    // Bind the resolved environment connection for the rest of this request so
+    // every `import db` usage transparently targets prod or sandbox.
+    runWithDb(edb, () => next());
   } catch (error) {
     res.status(401).json({ success: false, error: 'Invalid or expired token' });
   }
@@ -68,7 +82,8 @@ export const requirePermission = (module: string, resource: string, action: stri
       return;
     }
 
-    const hasPermission = await db('role_permissions as rp')
+    const rdb = req.db || db;
+    const hasPermission = await rdb('role_permissions as rp')
       .join('permissions as p', 'rp.permission_id', 'p.id')
       .where({
         'rp.role_id': req.user.roleId,

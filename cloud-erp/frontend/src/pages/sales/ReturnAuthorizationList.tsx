@@ -5,6 +5,7 @@ export default function ReturnAuthorizationList() {
   return (
     <TransactionListPage
       title="Return Authorizations"
+      permissionKey="return_authorization"
       iconBg="bg-orange-500" iconText="↺"
       endpoint="/api/sales/return-authorizations"
       newPath="/sales/return-authorizations/new"

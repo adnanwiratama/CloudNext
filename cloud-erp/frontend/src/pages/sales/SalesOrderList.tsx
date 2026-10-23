@@ -24,7 +24,9 @@ export default function SalesOrderList() {
       endpoint="/api/sales/orders"
       newPath="/sales/orders/new"
       detailPath={r => `/sales/orders/${r.id}`}
+      editPath={r => `/sales/orders/${r.id}/edit`}
       columns={columns}
+      permissionKey="sales_order"
       numberField="so_number"
       dateField="order_date"
       memoField="customer_name"

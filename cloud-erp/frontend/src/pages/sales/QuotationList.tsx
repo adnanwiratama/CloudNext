@@ -25,10 +25,11 @@ export default function QuotationList() {
       newPath="/sales/quotations/new"
       detailPath={r => `/sales/quotations/${r.id}`}
       columns={columns}
+      permissionKey="quotation"
       numberField="quotation_number"
       dateField="quotation_date"
       memoField="customer_name"
-      statusOptions={['- All -', 'draft', 'submitted', 'approved', 'converted']}
+      statusOptions={['- All -', 'in_discussion', 'proposal', 'in_negotiation', 'purchasing', 'converted']}
     />
   );
 }

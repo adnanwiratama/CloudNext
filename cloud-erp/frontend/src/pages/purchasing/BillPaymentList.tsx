@@ -19,6 +19,7 @@ export default function BillPaymentList() {
   return (
     <TransactionListPage
       title="Bill Payments"
+      permissionKey="bill_payment"
       iconBg="bg-amber-600"
       iconText="BP"
       endpoint="/api/purchasing/vendor-payments"

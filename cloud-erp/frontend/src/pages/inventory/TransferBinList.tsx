@@ -16,6 +16,7 @@ export default function TransferBinList() {
   return (
     <TransactionListPage
       title="Transfer Bins"
+      permissionKey="transfer_order"
       iconBg="bg-emerald-600"
       iconText="TB"
       endpoint="/api/inventory/transfer-bins"

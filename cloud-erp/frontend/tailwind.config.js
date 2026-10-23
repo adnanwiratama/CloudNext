@@ -17,9 +17,9 @@ export default {
           'nav-border':     '#1e4a66',
           'nav-text':       '#e0eef7',
           'nav-text-hover': '#ffffff',
-          // Sub nav (second row) - Oracle blue
-          subnav:           '#2e729f',  // Oracle NetSuite blue
-          'subnav-hover':   '#3a89b8',
+          // Sub nav (second row) - NetSuite muted slate-blue
+          subnav:           '#5b7794',  // NetSuite slate-blue
+          'subnav-hover':   '#4e687f',
           // Header
           header:           '#ffffff',
           border:           '#d0d5dd',

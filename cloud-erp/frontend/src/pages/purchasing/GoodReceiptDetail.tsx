@@ -1,14 +1,17 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { ChevronUp, ChevronDown, Loader2, Package, FileText, CheckCircle2 } from 'lucide-react';
+import { ChevronUp, ChevronDown, Loader2, Package, FileText, CheckCircle2, Printer } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
-import { formatDate, formatNumber, formatCurrency } from '../../utils/format';
+import { formatDate, formatNumber, formatCurrency, formatStatus } from '../../utils/format';
 import TransactionLink from '../../components/common/TransactionLink';
 import TransactionFilesTab from '../../components/transaction/TransactionFilesTab';
 import TransactionSysInfoTab from '../../components/transaction/TransactionSysInfoTab';
+import { usePrintDocument } from '../../hooks/usePrintDocument';
 import toast from 'react-hot-toast';
+import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
+import EditTransactionButton from '../../components/transaction/EditTransactionButton';
 
 export default function GoodReceiptDetail() {
   const { id } = useParams<{ id: string }>();
@@ -29,17 +32,44 @@ export default function GoodReceiptDetail() {
     enabled: !!id, staleTime: 0, refetchOnMount: true,
   });
 
-  const billMutation = useMutation({
-    mutationFn: () => api.post(`/api/purchasing/orders/${receipt?.po_id}/bill`, { billDate: new Date().toISOString().split('T')[0] }),
-    onSuccess: (res) => { toast.success(`Vendor Bill ${res.data.data.bill_number} created`); navigate(`/purchasing/bills/${res.data.data.id}`); },
-    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to create bill'),
-  });
+  const { print } = usePrintDocument();
 
   if (isLoading) return <div className="flex items-center justify-center h-64"><Loader2 className="animate-spin text-blue-500" size={32}/></div>;
   if (!receipt) return <div className="p-6 text-red-600">Good receipt not found.</div>;
 
   const dis = 'w-full border border-slate-200 rounded text-sm px-2 py-1.5 bg-slate-50 text-slate-700 cursor-default';
-  const totalValue = (receipt.lines||[]).reduce((s:number,l:any)=>s+parseFloat(l.quantity)*parseFloat(l.unit_cost||0), 0);
+  const totalValue = (receipt.lines||[]).reduce((s:number,l:any)=>{
+    const recvQty = parseFloat(l.quantity)||0;
+    const gross = recvQty*parseFloat(l.unit_cost||0);
+    const poQty = parseFloat(l.po_qty||0);
+    const poDisc = parseFloat(l.po_discount||0);
+    const lineDisc = (poDisc>0 && poQty>0) ? Math.round((poDisc*(recvQty/poQty))*100)/100 : 0;
+    return s + (gross - lineDisc);
+  }, 0);
+
+  const handlePrint = () => {
+    if (!receipt) return;
+    print({
+      title: 'Goods Receipt',
+      number: receipt.receipt_number,
+      status: formatStatus(receipt.status),
+      partyLabel: 'Vendor',
+      partyName: receipt.vendor_name,
+      meta: [
+        { label: 'PO Number', value: receipt.po_number || '-' },
+        { label: 'Receipt Date', value: formatDate(receipt.receipt_date) },
+        { label: 'Location', value: receipt.location_name || '-' },
+      ],
+      columns: [
+        { label: 'Item', value: (r: any) => `${r.item_code || ''} ${r.item_name || ''}`.trim() },
+        { label: 'Description', value: (r: any) => r.description || '' },
+        { label: 'Qty Received', align: 'right', value: (r: any) => formatNumber(r.quantity, 2) },
+        { label: 'Unit', value: (r: any) => r.uom_code || '' },
+      ],
+      rows: receipt.lines || [],
+      memo: receipt.memo,
+    });
+  };
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -60,11 +90,18 @@ export default function GoodReceiptDetail() {
         </div>
         <div className="max-w-screen-xl mx-auto px-4 py-2 flex items-center gap-2">
           <button onClick={() => navigate('/purchasing/receipts')} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Back</button>
+          {!(receipt.bills_count > 0) && (
+            <EditTransactionButton permKey="item_receipt" to={`/purchasing/receipts/${id}/edit`} />
+          )}
+          <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
           <button onClick={() => navigate(`/purchasing/orders/${receipt.po_id}`)} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">View PO</button>
-          <button onClick={() => billMutation.mutate()} disabled={billMutation.isPending}
-            className="flex items-center gap-1 px-3 py-1.5 bg-blue-700 text-white text-sm rounded hover:bg-blue-800 disabled:opacity-60">
-            {billMutation.isPending?<Loader2 size={12} className="animate-spin"/>:<FileText size={13}/>} Create Bill
-          </button>
+          {!['fully_billed','closed'].includes(receipt.po_status) && (
+            <button onClick={() => navigate(`/purchasing/bills/new?poId=${receipt.po_id}`)}
+              className="flex items-center gap-1 px-3 py-1.5 bg-blue-700 text-white text-sm rounded hover:bg-blue-800">
+              <FileText size={13}/> Create Bill
+            </button>
+          )}
+          <DeleteTransactionButton type="item_receipt" id={id!} listPath="/purchasing/receipts" label={receipt.receipt_number} />
         </div>
       </div>
 
@@ -134,14 +171,21 @@ export default function GoodReceiptDetail() {
                       <th className="px-3 py-2 text-right font-semibold text-slate-600 w-28">Qty Received</th>
                       <th className="px-3 py-2 text-left font-semibold text-slate-600 w-14">UOM</th>
                       <th className="px-3 py-2 text-right font-semibold text-slate-600 w-32">Unit Cost</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-600 w-28">Discount</th>
                       <th className="px-3 py-2 text-right font-semibold text-slate-600 w-32">Total Value</th>
                       <th className="px-3 py-2 text-left font-semibold text-slate-600 w-28">Department</th>
                       <th className="px-3 py-2 text-left font-semibold text-slate-600 w-28">Location</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {(receipt.lines||[]).length===0?<tr><td colSpan={9} className="px-3 py-4 text-center text-slate-400 italic">No items</td></tr>
-                    :(receipt.lines||[]).map((l:any,i:number)=>(
+                    {(receipt.lines||[]).length===0?<tr><td colSpan={10} className="px-3 py-4 text-center text-slate-400 italic">No items</td></tr>
+                    :(receipt.lines||[]).map((l:any,i:number)=>{
+                      const recvQty = parseFloat(l.quantity)||0;
+                      const gross = recvQty * parseFloat(l.unit_cost||0);
+                      const poQty = parseFloat(l.po_qty||0);
+                      const poDisc = parseFloat(l.po_discount||0);
+                      const lineDisc = (poDisc>0 && poQty>0) ? Math.round((poDisc*(recvQty/poQty))*100)/100 : 0;
+                      return (
                       <tr key={l.id} className="border-t border-slate-100">
                         <td className="px-3 py-1.5 text-slate-400">{i+1}</td>
                         <td className="px-3 py-1.5 font-mono text-xs text-blue-600">{l.item_code}</td>
@@ -149,11 +193,13 @@ export default function GoodReceiptDetail() {
                         <td className="px-3 py-1.5 text-right text-emerald-600 font-semibold">{formatNumber(l.quantity,0)}</td>
                         <td className="px-3 py-1.5 text-slate-500">{l.uom_code||'-'}</td>
                         <td className="px-3 py-1.5 text-right">{formatCurrency(l.unit_cost)}</td>
-                        <td className="px-3 py-1.5 text-right font-medium">{formatCurrency(parseFloat(l.quantity)*parseFloat(l.unit_cost||0))}</td>
+                        <td className="px-3 py-1.5 text-right text-amber-600">{lineDisc>0?formatCurrency(lineDisc):'-'}</td>
+                        <td className="px-3 py-1.5 text-right font-medium">{formatCurrency(gross - lineDisc)}</td>
                         <td className="px-3 py-1.5 text-slate-500">{l.department_name||'-'}</td>
                         <td className="px-3 py-1.5 text-slate-500">{l.location_name||'-'}</td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

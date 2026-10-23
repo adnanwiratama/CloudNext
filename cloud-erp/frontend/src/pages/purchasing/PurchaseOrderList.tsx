@@ -23,7 +23,9 @@ export default function PurchaseOrderList() {
       endpoint="/api/purchasing/orders"
       newPath="/purchasing/orders/new"
       detailPath={r => `/purchasing/orders/${r.id}`}
+      editPath={r => `/purchasing/orders/${r.id}/edit`}
       columns={columns}
+      permissionKey="purchase_order"
       numberField="po_number"
       dateField="order_date"
       memoField="vendor_name"

@@ -19,6 +19,7 @@ export default function CustomerPaymentList() {
   return (
     <TransactionListPage
       title="Customer Payments"
+      permissionKey="customer_payment"
       iconBg="bg-blue-600"
       iconText="CP"
       endpoint="/api/sales/payments"

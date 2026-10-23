@@ -23,7 +23,11 @@ export function useFormOptions() {
 
   const accounts = useQuery({
     queryKey: ['options-accounts'],
-    queryFn: () => api.get('/api/accounting/accounts').then(r => r.data.data || []),
+    // Dropdowns are for selecting a postable account, so exclude Summary (parent/
+    // header) accounts and Inactive accounts. The backend already omits inactive
+    // ones by default; we additionally drop summary accounts here.
+    queryFn: () => api.get('/api/accounting/accounts').then(r =>
+      (r.data.data || []).filter((a: any) => !a.is_summary && a.is_active !== false)),
     staleTime: 60000,
   });
 
@@ -39,9 +43,23 @@ export function useFormOptions() {
     staleTime: 60000,
   });
 
+  // Employees are stored as users (same source as the Employees list page).
+  const employees = useQuery({
+    queryKey: ['options-employees'],
+    queryFn: () => api.get('/api/settings/users', { params: { limit: 500 } }).then(r => r.data.data || []),
+    staleTime: 60000,
+  });
+
   const taxCodes = useQuery({
     queryKey: ['options-tax-codes'],
     queryFn: () => api.get('/api/settings/tax-codes').then(r => r.data.data || []),
+    staleTime: 60000,
+  });
+
+  // All active units of measure (with uom_type_id) — used to filter the line "Unit" dropdown by the item's unit type
+  const uomUnits = useQuery({
+    queryKey: ['options-uom-units'],
+    queryFn: () => api.get('/api/settings/uom').then(r => r.data.data || []),
     staleTime: 60000,
   });
 
@@ -55,7 +73,9 @@ export function useFormOptions() {
     accounts: accounts.data || [],
     locations: locations.data || [],
     departments: departments.data || [],
+    employees: employees.data || [],
     taxCodes: taxCodes.data || [],
+    uomUnits: uomUnits.data || [],
     currencies,
     paymentTerms,
     isLoading: customers.isLoading || vendors.isLoading || items.isLoading,

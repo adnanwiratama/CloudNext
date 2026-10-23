@@ -28,6 +28,7 @@ export default function VendorBillList() {
       newPath="/purchasing/bills/new"
       detailPath={r => `/purchasing/bills/${r.id}`}
       columns={columns}
+      permissionKey="vendor_bill"
       numberField="bill_number"
       dateField="bill_date"
       memoField="vendor_name"

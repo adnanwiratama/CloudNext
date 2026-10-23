@@ -3,11 +3,15 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ChevronUp, ChevronDown, CheckCircle, FileText, Truck, Loader2, CheckCircle2, ShoppingCart } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
-import { formatCurrency, formatDate, formatNumber } from '../../utils/format';
+import { formatCurrency, formatDate, formatNumber, formatStatus } from '../../utils/format';
 import toast from 'react-hot-toast';
 import TransactionLink from '../../components/common/TransactionLink';
 import TransactionFilesTab from '../../components/transaction/TransactionFilesTab';
 import TransactionSysInfoTab from '../../components/transaction/TransactionSysInfoTab';
+import { Printer } from 'lucide-react';
+import { usePrintDocument } from '../../hooks/usePrintDocument';
+import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
+import EditTransactionButton from '../../components/transaction/EditTransactionButton';
 
 export default function SalesOrderDetail() {
   const { id } = useParams<{ id: string }>();
@@ -18,7 +22,7 @@ export default function SalesOrderDetail() {
 
   const [primaryOpen, setPrimaryOpen] = useState(true);
   const [classOpen, setClassOpen] = useState(true);
-  const [activeTab, setActiveTab] = useState<'items'|'files'|'gl'|'sysinfo'>('items');
+  const [activeTab, setActiveTab] = useState<'items'|'related'|'files'|'gl'|'sysinfo'>('items');
 
   useEffect(() => { if (justSaved && id) qc.invalidateQueries({ queryKey: ['sales-order', id] }); }, [justSaved, id, qc]);
 
@@ -27,6 +31,59 @@ export default function SalesOrderDetail() {
     queryFn: () => api.get(`/api/sales/orders/${id}`).then(r => r.data.data),
     enabled: !!id, staleTime: 0, refetchOnMount: true,
   });
+
+  const { print } = usePrintDocument();
+  const handlePrint = () => {
+    if (!so) return;
+    print({
+      title: 'Sales Order',
+      number: so.so_number,
+      status: formatStatus(so.status),
+      partyLabel: 'Customer',
+      partyName: so.customer_name,
+      partyLines: [so.billing_address, so.customer_email].filter(Boolean),
+      meta: [
+        { label: 'Order Date', value: formatDate(so.order_date) },
+        { label: 'Expected Ship', value: so.expected_ship_date ? formatDate(so.expected_ship_date) : '-' },
+        { label: 'Payment Terms', value: so.payment_terms || '-' },
+        { label: 'Currency', value: so.currency || '-' },
+        { label: 'Sales Rep', value: so.sales_rep_name || '-' },
+      ],
+      columns: [
+        { label: 'Item', value: (r: any) => `${r.item_code || ''} ${r.item_name || ''}`.trim() },
+        { label: 'Description', value: (r: any) => r.description || '' },
+        { label: 'Qty', align: 'right', value: (r: any) => formatNumber(r.quantity, 2) },
+        { label: 'Unit', value: (r: any) => r.uom_code || '' },
+        { label: 'Unit Price', align: 'right', value: (r: any) => formatCurrency(r.unit_price) },
+        { label: 'Disc', align: 'right', value: (r: any) => (Number(r.discount_amount) > 0 ? formatCurrency(r.discount_amount) : '-') },
+        { label: 'Tax', align: 'right', value: (r: any) => (Number(r.tax_amount) > 0 ? formatCurrency(r.tax_amount) : '-') },
+        { label: 'Amount', align: 'right', value: (r: any) => formatCurrency(r.amount) },
+      ],
+      rows: so.lines || [],
+      totals: [
+        { label: 'Subtotal', value: formatCurrency(so.subtotal) },
+        { label: 'Discount', value: formatCurrency(so.discount_amount) },
+        { label: 'Tax', value: formatCurrency(so.tax_amount) },
+        { label: 'Shipping', value: formatCurrency(so.shipping_amount) },
+        { label: 'Total', value: formatCurrency(so.total_amount), bold: true },
+      ],
+      memo: so.memo,
+    });
+  };
+
+  // Live per-location stock (Available / On Hand) for the SO's location — mirrors the input form
+  const [stockMap, setStockMap] = useState<Record<string, { onHand: number; available: number }>>({});
+  const soItemKey = (so?.lines || []).map((l: any) => l.item_id).filter(Boolean).join(',');
+  useEffect(() => {
+    const ids = Array.from(new Set((so?.lines || []).map((l: any) => l.item_id).filter(Boolean)));
+    if (ids.length === 0) { setStockMap({}); return; }
+    const params: any = { itemIds: ids.join(',') };
+    if (so?.location_id) params.locationId = so.location_id;
+    api.get('/api/sales/stock', { params })
+      .then(r => setStockMap(r.data.data || {}))
+      .catch(() => setStockMap({}));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soItemKey, so?.location_id]);
 
   const approveMutation = useMutation({
     mutationFn: () => api.post(`/api/sales/orders/${id}/approve`),
@@ -67,11 +124,13 @@ export default function SalesOrderDetail() {
         </div>
         <div className="max-w-screen-xl mx-auto px-4 py-2 flex items-center gap-2 flex-wrap">
           <button onClick={() => navigate('/sales/orders')} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Back</button>
-          <button onClick={() => navigate(`/sales/orders/${id}/edit`)} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Edit</button>
+          <EditTransactionButton permKey="sales_order" to={`/sales/orders/${id}/edit`} />
+          <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
           {canApprove && <button onClick={() => approveMutation.mutate()} disabled={approveMutation.isPending} className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-sm rounded hover:bg-green-700 disabled:opacity-60"><CheckCircle size={13}/> Approve</button>}
           {canApprove && <button onClick={() => { if (confirm('Reject?')) rejectMutation.mutate(); }} disabled={rejectMutation.isPending} className="px-3 py-1.5 bg-red-600 text-white text-sm rounded hover:bg-red-700 disabled:opacity-60">Reject</button>}
           {canFulfill && <button onClick={() => navigate(`/sales/fulfillments/new?soId=${id}`)} className="flex items-center gap-1 px-3 py-1.5 bg-blue-700 text-white text-sm rounded hover:bg-blue-800"><Truck size={13}/> Fulfillment</button>}
           {canInvoice && <button onClick={() => navigate(`/sales/invoices/new?soId=${id}`)} className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700"><FileText size={13}/> Create Invoice</button>}
+          <DeleteTransactionButton type="sales_order" id={id!} listPath="/sales/orders" label={so.so_number} />
         </div>
       </div>
 
@@ -91,23 +150,30 @@ export default function SalesOrderDetail() {
           {primaryOpen && (
             <div className="px-4 pb-5 border-t border-slate-100">
               <div className="grid grid-cols-3 gap-x-10 gap-y-4 mt-4">
+                {/* Column 1 */}
                 <div className="space-y-3">
-                  <div><div className="text-xs text-slate-500 mb-0.5">Order Number</div><div className="text-sm font-medium text-blue-700 font-mono">{so.so_number}</div></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Customer</label><input readOnly value={so.customer_name||''} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Order Date</label><input readOnly value={so.order_date?.split('T')[0]||''} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Expected Ship Date</label><input readOnly value={so.expected_ship_date?.split('T')[0]||''} className={dis}/></div>
                 </div>
+                {/* Column 2 */}
                 <div className="space-y-3">
                   <div><label className="block text-xs text-slate-500 mb-1">Currency</label><input readOnly value={so.currency||''} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Payment Terms</label><input readOnly value={so.payment_terms||''} className={dis}/></div>
-                  <div><label className="block text-xs text-slate-500 mb-1">Location</label><input readOnly value={so.location_name||''} className={dis}/></div>
-                  <div><label className="block text-xs text-slate-500 mb-1">Department</label><input readOnly value={so.department_name||''} className={dis}/></div>
-                </div>
-                <div className="space-y-3">
-                  <div><label className="block text-xs text-slate-500 mb-1">Sales Rep</label><input readOnly value={so.sales_rep_name||''} className={dis}/></div>
-                  <div><label className="block text-xs text-slate-500 mb-1">Status</label><input readOnly value={so.status?.replace(/_/g,' ')||''} className={dis}/></div>
-                  <div><label className="block text-xs text-slate-500 mb-1">Total</label><input readOnly value={Number(so.total_amount||0).toLocaleString('id-ID',{minimumFractionDigits:2})} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Memo</label><input readOnly value={so.memo||''} className={dis}/></div>
+                </div>
+                {/* Column 3 — Summary */}
+                <div className="space-y-3">
+                  <div className="border border-slate-200 rounded overflow-hidden">
+                    <div className="bg-slate-600 text-white text-xs font-semibold px-3 py-1.5">Summary</div>
+                    <div className="text-sm">
+                      <div className="flex justify-between px-3 py-1.5 border-b border-slate-100"><span className="text-slate-600">Subtotal</span><span>{formatCurrency(so.subtotal)}</span></div>
+                      <div className="flex justify-between px-3 py-1.5 border-b border-slate-100"><span className="text-slate-600">Discount</span><span className="text-amber-600">{formatCurrency(so.discount_amount)}</span></div>
+                      <div className="flex justify-between px-3 py-1.5 border-b border-slate-100"><span className="text-slate-600">Tax</span><span>{formatCurrency(so.tax_amount)}</span></div>
+                      <div className="flex justify-between px-3 py-1.5 border-b border-slate-100"><span className="text-slate-600">Shipping</span><span>{formatCurrency(so.shipping_amount)}</span></div>
+                      <div className="flex justify-between px-3 py-1.5 font-bold bg-slate-50"><span>Total</span><span>{formatCurrency(so.total_amount)}</span></div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -133,10 +199,10 @@ export default function SalesOrderDetail() {
         {/* Tabs: Items / Files / System Info */}
         <div className="bg-white border border-slate-200 rounded shadow-sm">
           <div className="border-b border-slate-200 px-4 flex">
-            {(['items','files','gl','sysinfo'] as const).map(tab => (
+            {(['items','related','files','gl','sysinfo'] as const).map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)}
                 className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${activeTab===tab?'border-blue-600 text-blue-700':'border-transparent text-slate-500 hover:text-slate-700'}`}>
-                {tab==='items'?'Items':tab==='files'?'Files':tab==='gl'?'GL Impact':'System Information'}
+                {tab==='items'?'Items':tab==='related'?'Related Records':tab==='files'?'Files':tab==='gl'?'GL Impact':'System Information'}
               </button>
             ))}
           </div>
@@ -148,67 +214,92 @@ export default function SalesOrderDetail() {
                   <table className="w-full text-xs min-w-max">
                     <thead className="bg-slate-50 border-b border-slate-200">
                       <tr>
-                        <th className="px-3 py-2 text-left font-semibold text-slate-600 w-8">#</th>
-                        <th className="px-3 py-2 text-left font-semibold text-slate-600">Item</th>
-                        <th className="px-3 py-2 text-left font-semibold text-slate-600">Description</th>
+                        <th className="px-3 py-2 text-left font-semibold text-slate-600 w-48">Item</th>
+                        <th className="px-3 py-2 text-left font-semibold text-slate-600 w-40">Description</th>
+                        <th className="px-3 py-2 text-right font-semibold text-slate-600 w-24">Available</th>
+                        <th className="px-3 py-2 text-right font-semibold text-slate-600 w-24">On Hand</th>
                         <th className="px-3 py-2 text-right font-semibold text-slate-600 w-20">Qty</th>
-                        <th className="px-3 py-2 text-left font-semibold text-slate-600 w-14">UOM</th>
+                        <th className="px-3 py-2 text-left font-semibold text-slate-600 w-16">Unit</th>
                         <th className="px-3 py-2 text-right font-semibold text-slate-600 w-32">Unit Price</th>
-                        <th className="px-3 py-2 text-right font-semibold text-slate-600 w-20">Disc%</th>
-                        <th className="px-3 py-2 text-right font-semibold text-slate-600 w-28">Tax</th>
-                        <th className="px-3 py-2 text-right font-semibold text-slate-600 w-32">Amount</th>
+                        <th className="px-3 py-2 text-right font-semibold text-slate-600 w-24">Disc %</th>
+                        <th className="px-3 py-2 text-right font-semibold text-slate-600 w-28">Disc Amt</th>
+                        <th className="px-3 py-2 text-left font-semibold text-slate-600 w-44">Disc Account</th>
+                        <th className="px-3 py-2 text-left font-semibold text-slate-600 w-28">Tax Code</th>
+                        <th className="px-3 py-2 text-right font-semibold text-slate-600 w-24">Tax Amt</th>
+                        <th className="px-3 py-2 text-right font-semibold text-slate-600 w-28">Amount</th>
                         <th className="px-3 py-2 text-left font-semibold text-slate-600 w-28">Department</th>
                         <th className="px-3 py-2 text-left font-semibold text-slate-600 w-28">Location</th>
                         <th className="px-3 py-2 text-right font-semibold text-slate-600 w-24">Fulfilled</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {(so.lines||[]).length===0 ? <tr><td colSpan={12} className="px-3 py-4 text-center text-slate-400 italic">No items</td></tr>
-                      : (so.lines||[]).map((l:any,i:number) => (
+                      {(so.lines||[]).length===0 ? <tr><td colSpan={16} className="px-3 py-4 text-center text-slate-400 italic">No items</td></tr>
+                      : (so.lines||[]).map((l:any) => {
+                        const s = stockMap[l.item_id];
+                        // Stock is stored in base units; show it in the line's unit (base qty / rate).
+                        const rate = Number(l.uom_rate) > 0 ? Number(l.uom_rate) : 1;
+                        const availInUnit = s ? Number(s.available) / rate : 0;
+                        const onHandInUnit = s ? Number(s.onHand) / rate : 0;
+                        return (
                         <tr key={l.id} className="border-t border-slate-100">
-                          <td className="px-3 py-1.5 text-slate-400">{l.line_number||i+1}</td>
                           <td className="px-3 py-1.5"><span className="font-mono text-xs text-blue-600">{l.item_code}</span><div className="text-xs text-slate-600">{l.item_name}</div></td>
                           <td className="px-3 py-1.5 text-slate-500 text-xs">{l.description||'-'}</td>
+                          <td className="px-3 py-1.5 text-right text-emerald-600">{formatNumber(availInUnit,2)}</td>
+                          <td className="px-3 py-1.5 text-right text-slate-500">{formatNumber(onHandInUnit,2)}</td>
                           <td className="px-3 py-1.5 text-right">{formatNumber(l.quantity,2)}</td>
                           <td className="px-3 py-1.5 text-slate-500">{l.uom_code||'-'}</td>
                           <td className="px-3 py-1.5 text-right">{formatCurrency(l.unit_price)}</td>
                           <td className="px-3 py-1.5 text-right">{Number(l.discount_percent)>0?`${l.discount_percent}%`:'-'}</td>
-                          <td className="px-3 py-1.5 text-right">{formatCurrency(l.tax_amount)}</td>
+                          <td className="px-3 py-1.5 text-right">{Number(l.discount_amount)>0?formatCurrency(l.discount_amount):'-'}</td>
+                          <td className="px-3 py-1.5 text-slate-500">{Number(l.discount_amount)>0?(so.discount_account_name||so.discount_account_code||'-'):'-'}</td>
+                          <td className="px-3 py-1.5 text-slate-500">{l.tax_code||'-'}</td>
+                          <td className="px-3 py-1.5 text-right">{Number(l.tax_amount)>0?formatCurrency(l.tax_amount):'-'}</td>
                           <td className="px-3 py-1.5 text-right font-medium">{formatCurrency(l.amount)}</td>
-                          <td className="px-3 py-1.5 text-slate-500">{l.department_name||'-'}</td>
-                          <td className="px-3 py-1.5 text-slate-500">{l.location_name||'-'}</td>
+                          <td className="px-3 py-1.5 text-slate-500">{so.department_name||'-'}</td>
+                          <td className="px-3 py-1.5 text-slate-500">{so.location_name||'-'}</td>
                           <td className="px-3 py-1.5 text-right"><span className={parseFloat(l.qty_fulfilled)>=parseFloat(l.quantity)?'text-emerald-600':'text-amber-600'}>{formatNumber(l.qty_fulfilled,2)}</span></td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
-                    {(so.lines||[]).length>0 && (
-                      <tfoot>
-                        <tr className="border-t-2 border-slate-300 bg-slate-50 font-semibold">
-                          <td colSpan={8} className="px-3 py-1.5 text-right text-slate-600">Total</td>
-                          <td className="px-3 py-1.5 text-right">{formatCurrency(so.total_amount)}</td>
-                          <td colSpan={3}/>
-                        </tr>
-                      </tfoot>
-                    )}
                   </table>
                 </div>
-                {/* Related docs */}
-                {so.fulfillments?.length>0 && (
-                  <div><div className="text-xs font-semibold text-slate-600 mb-1.5">Fulfillments</div>
-                    <div className="flex flex-wrap gap-2">{so.fulfillments.map((f:any)=>(
-                      <button key={f.id} onClick={()=>navigate(`/sales/fulfillments/${f.id}`)} className="text-xs text-blue-600 hover:underline border border-blue-200 rounded px-2 py-1 bg-blue-50">{f.fulfillment_number}</button>
-                    ))}</div>
-                  </div>
-                )}
-                {so.invoices?.length>0 && (
-                  <div><div className="text-xs font-semibold text-slate-600 mb-1.5">Invoices</div>
-                    <div className="flex flex-wrap gap-2">{so.invoices.map((inv:any)=>(
-                      <button key={inv.id} onClick={()=>navigate(`/sales/invoices/${inv.id}`)} className="text-xs text-blue-600 hover:underline border border-blue-200 rounded px-2 py-1 bg-blue-50">{inv.invoice_number}</button>
-                    ))}</div>
-                  </div>
-                )}
               </div>
             )}
+            {activeTab==='related' && (() => {
+              const related = [
+                ...(so.fulfillments||[]).map((f:any) => ({ id:f.id, date:f.fulfillment_date, type:'Item Fulfillment', doc:f.fulfillment_number, status:f.status, amount:null, path:`/sales/fulfillments/${f.id}` })),
+                ...(so.invoices||[]).map((inv:any) => ({ id:inv.id, date:inv.invoice_date, type:'Invoice', doc:inv.invoice_number, status:inv.status, amount:inv.total_amount, path:`/sales/invoices/${inv.id}` })),
+              ].sort((a,b)=> new Date(a.date||0).getTime() - new Date(b.date||0).getTime());
+              return related.length === 0
+                ? <div className="py-8 text-center text-slate-400 italic text-xs border border-dashed border-slate-200 rounded">No related records yet</div>
+                : (
+                  <div className="border border-slate-200 rounded overflow-x-auto">
+                    <table className="w-full text-xs min-w-max">
+                      <thead className="bg-slate-50 border-b border-slate-200">
+                        <tr>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-600 w-28">Date</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-600 w-40">Type</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-600 w-44">Document #</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-600 w-32">Status</th>
+                          <th className="px-3 py-2 text-right font-semibold text-slate-600 w-36">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {related.map(r => (
+                          <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50">
+                            <td className="px-3 py-1.5">{r.date ? formatDate(r.date) : '-'}</td>
+                            <td className="px-3 py-1.5 text-slate-700">{r.type}</td>
+                            <td className="px-3 py-1.5"><button onClick={()=>navigate(r.path)} className="text-blue-600 hover:underline font-mono">{r.doc}</button></td>
+                            <td className="px-3 py-1.5"><span className="capitalize">{String(r.status||'').replace(/_/g,' ')}</span></td>
+                            <td className="px-3 py-1.5 text-right font-medium">{r.amount != null ? formatCurrency(r.amount) : '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+            })()}
             {activeTab==='files' && <TransactionFilesTab sourceType="sales_order" sourceId={id!}/>}
             {activeTab==='gl' && (
               <div>
@@ -252,18 +343,6 @@ export default function SalesOrderDetail() {
           </div>
         </div>
 
-        {/* Totals summary */}
-        <div className="bg-white border border-slate-200 rounded shadow-sm p-4">
-          <div className="flex justify-end">
-            <div className="w-64 space-y-1.5 text-xs">
-              <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-slate-500">Subtotal</span><span>{formatCurrency(so.subtotal)}</span></div>
-              <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-slate-500">Discount</span><span className="text-red-600">-{formatCurrency(so.discount_amount)}</span></div>
-              <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-slate-500">Tax</span><span>{formatCurrency(so.tax_amount)}</span></div>
-              <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-slate-500">Shipping</span><span>{formatCurrency(so.shipping_amount)}</span></div>
-              <div className="flex justify-between py-1.5 font-bold text-sm"><span>Total</span><span className="text-blue-700">{formatCurrency(so.total_amount)}</span></div>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   );

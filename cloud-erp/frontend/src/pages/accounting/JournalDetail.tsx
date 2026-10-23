@@ -1,14 +1,16 @@
 import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronUp, ChevronDown, Loader2, CheckCircle2 } from 'lucide-react';
+import { ChevronUp, ChevronDown, Loader2, CheckCircle2, Printer } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import { StatusBadge } from '../../components/common/DataTable';
-import { formatCurrency, formatDate } from '../../utils/format';
+import { formatCurrency, formatDate, formatStatus } from '../../utils/format';
 import TransactionLink from '../../components/common/TransactionLink';
 import TransactionFilesTab from '../../components/transaction/TransactionFilesTab';
 import TransactionSysInfoTab from '../../components/transaction/TransactionSysInfoTab';
+import { usePrintDocument } from '../../hooks/usePrintDocument';
+import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
 
 export default function JournalDetail() {
   const { id } = useParams<{ id: string }>();
@@ -29,6 +31,8 @@ export default function JournalDetail() {
     enabled: !!id, staleTime: 0, refetchOnMount: true,
   });
 
+  const { print } = usePrintDocument();
+
   if (isLoading) return <div className="flex items-center justify-center h-64"><Loader2 className="animate-spin text-blue-500" size={32}/></div>;
   if (!je) return <div className="p-6 text-red-600">Journal entry not found.</div>;
 
@@ -36,6 +40,32 @@ export default function JournalDetail() {
   const totalCredit = (je.lines||[]).reduce((s:number,l:any) => s + parseFloat(l.credit || 0), 0);
   const isBalanced  = Math.abs(totalDebit - totalCredit) < 0.01;
   const dis = 'w-full border border-slate-200 rounded text-sm px-2 py-1.5 bg-slate-50 text-slate-700 cursor-default';
+
+  const handlePrint = () => {
+    if (!je) return;
+    print({
+      title: 'Journal Entry',
+      number: je.journal_number,
+      status: je.status ? formatStatus(je.status) : undefined,
+      meta: [
+        { label: 'Entry Date', value: formatDate(je.entry_date) },
+        { label: 'Type', value: je.type || '-' },
+        { label: 'Source', value: je.source_number || (je.source_type ? formatStatus(je.source_type) : '-') },
+      ],
+      columns: [
+        { label: 'Account', value: (l: any) => `${l.account_code || ''} ${l.account_name || ''}`.trim() },
+        { label: 'Memo', value: (l: any) => l.memo || '' },
+        { label: 'Debit', align: 'right', value: (l: any) => (parseFloat(l.debit) > 0 ? formatCurrency(l.debit) : '') },
+        { label: 'Credit', align: 'right', value: (l: any) => (parseFloat(l.credit) > 0 ? formatCurrency(l.credit) : '') },
+      ],
+      rows: je.lines || [],
+      totals: [
+        { label: 'Total Debit', value: formatCurrency(totalDebit), bold: true },
+        { label: 'Total Credit', value: formatCurrency(totalCredit), bold: true },
+      ],
+      memo: je.memo,
+    });
+  };
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -56,6 +86,8 @@ export default function JournalDetail() {
         </div>
         <div className="max-w-screen-xl mx-auto px-4 py-2 flex items-center gap-2">
           <button onClick={() => navigate('/accounting/journals')} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Back</button>
+          <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
+          <DeleteTransactionButton type="journal_entry" id={id!} listPath="/accounting/journals" label={je.journal_number} />
         </div>
       </div>
 

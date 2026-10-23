@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import db from '../../config/database';
 import { authenticate } from '../../middleware/auth';
+import { getEnvDb, resolveCompanyEnv } from '../../config/envDb';
 import { createAuditLog } from '../../utils/audit';
 
 const router = Router();
@@ -17,10 +18,15 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    // Resolve environment from the Company Code: a trailing "-SB" selects the
+    // sandbox DB. All auth queries below run against the resolved environment's DB.
+    const { code: resolvedCode, env } = resolveCompanyEnv(companyCode);
+    const edb = getEnvDb(env);
+
     // Find company first if code provided
     let companyId: string | undefined;
-    if (companyCode) {
-      const company = await db('companies').where({ code: companyCode.toUpperCase(), is_active: true }).first();
+    if (resolvedCode) {
+      const company = await edb('companies').where({ code: resolvedCode.toUpperCase(), is_active: true }).first();
       if (!company) {
         res.status(401).json({ success: false, error: 'Company code not found or inactive' });
         return;
@@ -29,7 +35,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
     }
 
     // Find user
-    const query = db('users as u')
+    const query = edb('users as u')
       .join('companies as c', 'u.company_id', 'c.id')
       .leftJoin('roles as r', 'u.role_id', 'r.id')
       .leftJoin('subsidiaries as s', 'u.subsidiary_id', 's.id')
@@ -53,16 +59,18 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
     }
 
     // Update last login
-    await db('users').where({ id: user.id }).update({ last_login_at: new Date() });
+    await edb('users').where({ id: user.id }).update({ last_login_at: new Date() });
 
+    // Encode the environment in the token so every subsequent request is routed
+    // to the correct DB (prod or sandbox).
     const token = jwt.sign(
-      { userId: user.id, companyId: user.company_id, email: user.email },
+      { userId: user.id, companyId: user.company_id, email: user.email, env },
       process.env.JWT_SECRET || 'fallback-secret',
       { expiresIn: process.env.JWT_EXPIRES_IN || '8h' } as any
     );
 
     const refreshToken = jwt.sign(
-      { userId: user.id },
+      { userId: user.id, env },
       process.env.JWT_SECRET || 'fallback-secret',
       { expiresIn: '7d' } as any
     );
@@ -75,6 +83,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       entityId: user.id,
       entityNumber: user.email,
       ipAddress: req.ip,
+      trx: edb, // write the audit log to the resolved environment's DB
     });
 
     res.json({
@@ -97,6 +106,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
           isAdmin: user.is_admin,
           timezone: user.timezone,
           language: user.language,
+          env, // 'prod' | 'sandbox' — which database this session is bound to
         },
       },
     });
@@ -115,14 +125,16 @@ router.post('/refresh', async (req: Request, res: Response): Promise<void> => {
     }
 
     const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET || 'fallback-secret') as any;
-    const user = await db('users').where({ id: decoded.userId, is_active: true }).first();
+    const env = decoded.env === 'sandbox' ? 'sandbox' : 'prod';
+    const edb = getEnvDb(env);
+    const user = await edb('users').where({ id: decoded.userId, is_active: true }).first();
     if (!user) {
       res.status(401).json({ success: false, error: 'User not found' });
       return;
     }
 
     const newToken = jwt.sign(
-      { userId: user.id, companyId: user.company_id, email: user.email },
+      { userId: user.id, companyId: user.company_id, email: user.email, env },
       process.env.JWT_SECRET || 'fallback-secret',
       { expiresIn: process.env.JWT_EXPIRES_IN || '8h' } as any
     );

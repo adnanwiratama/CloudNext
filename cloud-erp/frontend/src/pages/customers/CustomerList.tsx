@@ -5,6 +5,7 @@ export default function CustomerList() {
   return (
     <TransactionListPage
       title="Customers"
+      permissionKey="customer"
       iconBg="bg-sky-600" iconText="C"
       endpoint="/api/customers"
       newPath="/customers/new"

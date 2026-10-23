@@ -1,13 +1,16 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronUp, ChevronDown, Loader2, CheckCircle2, CheckCircle } from 'lucide-react';
+import { ChevronUp, ChevronDown, Loader2, CheckCircle2, CheckCircle, Printer } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
-import { formatCurrency, formatDate } from '../../utils/format';
+import { formatCurrency, formatDate, formatStatus } from '../../utils/format';
 import TransactionLink from '../../components/common/TransactionLink';
 import TransactionFilesTab from '../../components/transaction/TransactionFilesTab';
 import TransactionSysInfoTab from '../../components/transaction/TransactionSysInfoTab';
+import { usePrintDocument } from '../../hooks/usePrintDocument';
+import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
+import EditTransactionButton from '../../components/transaction/EditTransactionButton';
 
 export default function BillPaymentDetail() {
   const { id } = useParams<{ id: string }>();
@@ -27,6 +30,36 @@ export default function BillPaymentDetail() {
     queryFn: () => api.get(`/api/purchasing/vendor-payments/${id}`).then(r => r.data.data),
     enabled: !!id, staleTime: 0, refetchOnMount: true,
   });
+
+  const { print } = usePrintDocument();
+  const handlePrint = () => {
+    if (!payment) return;
+    print({
+      title: 'Bill Payment',
+      number: payment.payment_number,
+      status: formatStatus(payment.status || (payment.is_posted ? 'posted' : 'pending')),
+      partyLabel: 'Vendor',
+      partyName: payment.vendor_name,
+      meta: [
+        { label: 'Payment Date', value: formatDate(payment.payment_date) },
+        { label: 'Payment Method', value: payment.payment_method?.replace(/_/g, ' ') || '-' },
+        { label: 'Bank Account', value: payment.bank_account_name || '-' },
+        { label: 'Reference', value: payment.reference || '-' },
+        { label: 'Currency', value: payment.currency || '-' },
+      ],
+      columns: (payment.applications?.length > 0)
+        ? [
+            { label: 'Bill #', value: (r: any) => r.bill_number || '' },
+            { label: 'Bill Date', value: (r: any) => (r.bill_date ? formatDate(r.bill_date) : '-') },
+            { label: 'Applied', align: 'right', value: (r: any) => formatCurrency(r.applied_amount) },
+          ]
+        : undefined,
+      rows: payment.applications || [],
+      totals: [
+        { label: 'Total', value: formatCurrency(payment.amount), bold: true },
+      ],
+    });
+  };
 
   if (isLoading) return <div className="flex items-center justify-center h-64"><Loader2 className="animate-spin text-blue-500" size={32}/></div>;
   if (!payment) return <div className="p-6 text-red-600">Payment not found.</div>;
@@ -52,6 +85,9 @@ export default function BillPaymentDetail() {
         </div>
         <div className="max-w-screen-xl mx-auto px-4 py-2 flex items-center gap-2">
           <button onClick={() => navigate('/purchasing/payments')} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Back</button>
+          <EditTransactionButton permKey="bill_payment" to={`/purchasing/payments/${id}/edit`} />
+          <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
+          <DeleteTransactionButton type="bill_payment" id={id!} listPath="/purchasing/payments" label={payment.payment_number} />
         </div>
       </div>
 
@@ -79,8 +115,6 @@ export default function BillPaymentDetail() {
                 </div>
                 <div className="space-y-3">
                   <div><label className="block text-xs text-slate-500 mb-1">Currency</label><input readOnly value={payment.currency||''} className={dis}/></div>
-                  <div><label className="block text-xs text-slate-500 mb-1">Department</label><input readOnly value={payment.department_name||''} className={dis}/></div>
-                  <div><label className="block text-xs text-slate-500 mb-1">Location</label><input readOnly value={payment.location_name||''} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">GL Posted</label>
                     <input readOnly value={payment.is_posted?'Posted':'Pending'} className={`${dis} ${payment.is_posted?'text-green-700':''}`}/></div>
                 </div>
@@ -115,32 +149,67 @@ export default function BillPaymentDetail() {
           </div>
           <div className="p-4">
             {activeTab==='bills' && (
-              payment.applications?.length > 0 ? (
-                <div className="border border-slate-200 rounded overflow-hidden">
-                  <table className="w-full text-xs">
-                    <thead className="bg-slate-50 border-b border-slate-200">
-                      <tr>
-                        <th className="px-3 py-2 text-left font-semibold text-slate-600">Bill #</th>
-                        <th className="px-3 py-2 text-left font-semibold text-slate-600">Bill Date</th>
-                        <th className="px-3 py-2 text-left font-semibold text-slate-600">Due Date</th>
-                        <th className="px-3 py-2 text-right font-semibold text-slate-600">Bill Total</th>
-                        <th className="px-3 py-2 text-right font-semibold text-slate-600">Applied</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {payment.applications.map((app: any) => (
-                        <tr key={app.id} className="border-t border-slate-100">
-                          <td className="px-3 py-1.5"><TransactionLink number={app.bill_number} id={app.bill_id}/></td>
-                          <td className="px-3 py-1.5">{formatDate(app.bill_date)}</td>
-                          <td className="px-3 py-1.5">{formatDate(app.due_date)}</td>
-                          <td className="px-3 py-1.5 text-right font-medium">{formatCurrency(app.total_amount)}</td>
-                          <td className="px-3 py-1.5 text-right text-red-600 font-semibold">{formatCurrency(app.applied_amount)}</td>
+              <div className="space-y-5">
+                {payment.applications?.length > 0 ? (
+                  <div className="border border-slate-200 rounded overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead className="bg-slate-50 border-b border-slate-200">
+                        <tr>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-600">Bill #</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-600">Bill Date</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-600">Due Date</th>
+                          <th className="px-3 py-2 text-right font-semibold text-slate-600">Bill Total</th>
+                          <th className="px-3 py-2 text-right font-semibold text-slate-600">Applied</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : <p className="text-sm text-slate-400 italic">No bills applied.</p>
+                      </thead>
+                      <tbody>
+                        {payment.applications.map((app: any) => (
+                          <tr key={app.id} className="border-t border-slate-100">
+                            <td className="px-3 py-1.5"><TransactionLink number={app.bill_number} id={app.bill_id}/></td>
+                            <td className="px-3 py-1.5">{formatDate(app.bill_date)}</td>
+                            <td className="px-3 py-1.5">{formatDate(app.due_date)}</td>
+                            <td className="px-3 py-1.5 text-right font-medium">{formatCurrency(app.total_amount)}</td>
+                            <td className="px-3 py-1.5 text-right text-red-600 font-semibold">{formatCurrency(app.applied_amount)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : <p className="text-sm text-slate-400 italic">No bills applied.</p>}
+
+                {/* Vendor credits applied (prepayments / unapplied payments) — reduce cash paid */}
+                {payment.creditApplications?.length > 0 && (
+                  <div>
+                    <div className="text-xs font-semibold text-violet-700 mb-1.5">Vendor Credits Applied (reduced cash paid)</div>
+                    <div className="border border-violet-200 rounded overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead className="bg-violet-50 border-b border-violet-200">
+                          <tr>
+                            <th className="px-3 py-2 text-left font-semibold text-slate-600">Type</th>
+                            <th className="px-3 py-2 text-left font-semibold text-slate-600">Document #</th>
+                            <th className="px-3 py-2 text-left font-semibold text-slate-600">Date</th>
+                            <th className="px-3 py-2 text-right font-semibold text-slate-600">Applied</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {payment.creditApplications.map((c: any) => (
+                            <tr key={c.id} className="border-t border-slate-100">
+                              <td className="px-3 py-1.5">{c.credit_type === 'vendor_prepayment' ? 'Prepayment' : 'Payment Credit'}</td>
+                              <td className="px-3 py-1.5">
+                                {c.credit_type === 'vendor_prepayment'
+                                  ? <button onClick={()=>navigate(`/purchasing/prepayments/${c.credit_id}`)} className="text-blue-600 hover:underline font-mono">{c.credit_number}</button>
+                                  : <button onClick={()=>navigate(`/purchasing/payments/${c.credit_id}`)} className="text-blue-600 hover:underline font-mono">{c.credit_number}</button>}
+                              </td>
+                              <td className="px-3 py-1.5">{c.credit_date ? formatDate(c.credit_date) : '-'}</td>
+                              <td className="px-3 py-1.5 text-right text-violet-600 font-semibold">{formatCurrency(c.applied_amount)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
             {activeTab==='files' && <TransactionFilesTab sourceType="vendor_payment" sourceId={id!}/>}
             {activeTab==='gl' && (
