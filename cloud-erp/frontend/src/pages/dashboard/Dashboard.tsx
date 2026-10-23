@@ -185,7 +185,7 @@ function ApprovalQueuePortlet({ data }: { data: any }) {
     <table className="erp-table">
       <thead>
         <tr>
-          <th>Type</th><th>Number</th><th>Description</th>
+          <th>Type</th><th className="whitespace-nowrap">Number</th><th>Description</th>
           <th className="text-right">Amount</th><th></th>
         </tr>
       </thead>
@@ -193,7 +193,7 @@ function ApprovalQueuePortlet({ data }: { data: any }) {
         {items.map((item, i) => (
           <tr key={i} className="cursor-pointer" onClick={() => navigate(item.path)}>
             <td><span className={`badge ${item.color}`}>{item.type}</span></td>
-            <td className="font-mono text-sm text-blue-600 font-medium">{item.number}</td>
+            <td className="font-mono text-sm text-blue-600 font-medium whitespace-nowrap">{item.number}</td>
             <td className="text-slate-600 max-w-xs truncate">{item.desc}</td>
             <td className="text-right font-medium">{formatCurrency(item.amount)}</td>
             <td>
