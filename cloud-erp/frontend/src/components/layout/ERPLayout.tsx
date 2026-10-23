@@ -264,7 +264,10 @@ const NAV_MENUS: NavMenu[] = [
   },
   {
     label: 'Analytics',
-    items: [{ label: 'Dashboard', newPath: '/', listPath: '/' }],
+    items: [
+      { label: 'Dashboard', newPath: '/', listPath: '/' },
+      { label: 'Custom Report', newPath: '/analytics/custom-reports', listPath: '/analytics/custom-reports' },
+    ],
   },
   {
     label: 'Documents',
