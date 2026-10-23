@@ -1,9 +1,18 @@
 import axios from 'axios';
 import { useAuthStore } from '../store/authStore';
 
-// Strip trailing /api from VITE_API_URL to avoid double /api prefix
-// All page endpoints already include /api/ prefix (e.g. /api/auth/login)
-const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:4100').replace(/\/api$/, '');
+// API base resolution:
+// - If VITE_API_URL is set at build time, use it (strip trailing /api to avoid
+//   a double /api prefix, since all endpoints already include /api/).
+// - Otherwise default to EMPTY string → requests use a RELATIVE path (/api/...),
+//   so they go to the same origin the app is served from. In production this means
+//   https://<your-domain>/api/... which nginx proxies to the backend. This is why
+//   it works when served behind a domain without needing an env var.
+// - For local Vite dev (localhost:5173) we still need to reach the dev backend on
+//   port 4100, so fall back to that only when running on localhost.
+const ENV_API = import.meta.env.VITE_API_URL;
+const isLocalhost = typeof window !== 'undefined' && /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname);
+const API_BASE = (ENV_API || (isLocalhost ? 'http://localhost:4100' : '')).replace(/\/api$/, '');
 
 export const api = axios.create({
   baseURL: API_BASE,
