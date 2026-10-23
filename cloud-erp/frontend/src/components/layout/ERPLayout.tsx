@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Search, Bell, HelpCircle, ChevronDown, ChevronRight, LogOut,
   Settings, User, Plus, X, Home, Star, RefreshCw, MessageSquare, Grid,
-  List, History,
+  List, History, Menu,
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
 import api from '../../services/api';
@@ -455,6 +455,10 @@ export default function ERPLayout() {
   const [searchQuery,   setSearchQuery]  = useState('');
   const [searchResults, setResults]      = useState<any[]>([]);
   const [notifOpen,     setNotifOpen]    = useState(false);
+  // Mobile navigation drawer (tap-friendly replacement for the hover menus).
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [mobileExpanded, setMobileExpanded] = useState<string | null>(null);
+  const [mobileExpandedItem, setMobileExpandedItem] = useState<string | null>(null);
 
   const menuRef   = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLDivElement>(null);
@@ -501,6 +505,7 @@ export default function ERPLayout() {
   useEffect(() => {
     setActiveMenu(null); setHoveredItem(null); setHoveredLeaf(null);
     setUserMenuOpen(false); setCreateOpen(false); setSearchOpen(false);
+    setMobileNavOpen(false); setMobileExpanded(null); setMobileExpandedItem(null);
   }, [location.pathname]);
 
   const handleLogout = () => { logout(); navigate('/login'); toast.success('Logged out'); };
@@ -527,6 +532,14 @@ export default function ERPLayout() {
 
       {/* ═══ ROW 1: TOP HEADER ═══ */}
       <header className="h-16 bg-white flex items-center px-0 flex-shrink-0 shadow-sm border-b border-slate-200 z-50">
+        {/* Hamburger — mobile only (opens the tap-friendly nav drawer) */}
+        <button
+          onClick={() => setMobileNavOpen(true)}
+          className="lg:hidden flex items-center justify-center w-11 h-full border-r border-slate-200 text-slate-600 hover:bg-slate-50 flex-shrink-0"
+          title="Menu" aria-label="Open menu">
+          <Menu size={20} />
+        </button>
+
         {/* SECTION 1 (fixed): CloudNext ERP product logo — links home, never changes.
             Falls back to a text logo until /cloudnext-logo.png is added to public/. */}
         <Link to="/" className="flex items-center px-4 h-full border-r border-slate-200 flex-shrink-0 hover:bg-slate-50 transition-colors">
@@ -562,8 +575,8 @@ export default function ERPLayout() {
           <button onClick={() => window.location.reload()} className="flex items-center justify-center w-8 h-8 rounded text-slate-600 hover:bg-slate-100" title="Refresh"><RefreshCw size={14} /></button>
         </div>
 
-        {/* Search */}
-        <div ref={searchRef} className="px-3 w-full max-w-md relative">
+        {/* Search — hidden on mobile to save header space */}
+        <div ref={searchRef} className="hidden lg:block px-3 w-full max-w-md relative">
           <div onClick={() => setSearchOpen(true)}
             className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded cursor-text hover:bg-slate-100 focus-within:bg-white focus-within:border-blue-400 transition-all">
             <Search size={14} className="text-slate-400 flex-shrink-0" />
@@ -689,8 +702,8 @@ export default function ERPLayout() {
         </div>
       </header>
 
-      {/* ═══ ROW 2: NAV BAR (NetSuite-style slate-blue bar) ═══ */}
-      <div ref={menuRef} className="bg-erp-subnav h-10 flex items-stretch flex-shrink-0 z-40 relative shadow-sm">
+      {/* ═══ ROW 2: NAV BAR (NetSuite-style slate-blue bar) — desktop only ═══ */}
+      <div ref={menuRef} className="bg-erp-subnav h-10 hidden lg:flex items-stretch flex-shrink-0 z-40 relative shadow-sm">
         {/* Left icon group: history / favorites / home */}
         <div className="flex items-stretch">
           <button onClick={() => navigate(-1)} className="flex items-center justify-center px-2.5 text-white/90 hover:bg-erp-subnav-hover transition-colors" title="Back">
@@ -822,6 +835,125 @@ export default function ERPLayout() {
       <main className="flex-1 overflow-auto bg-erp-bg-page">
         <Outlet/>
       </main>
+
+      {/* ═══ MOBILE NAV DRAWER (tap-friendly; lg:hidden) ═══ */}
+      {mobileNavOpen && (
+        <div className="fixed inset-0 z-[60] lg:hidden">
+          {/* Backdrop */}
+          <div className="absolute inset-0 bg-black/40" onClick={() => setMobileNavOpen(false)} />
+          {/* Panel */}
+          <div className="absolute inset-y-0 left-0 w-[85%] max-w-sm bg-white shadow-2xl flex flex-col">
+            {/* Drawer header */}
+            <div className="h-14 flex items-center justify-between px-4 border-b border-slate-200 bg-erp-subnav">
+              <span className="text-white font-semibold text-sm">{user?.companyName || 'CloudNext ERP'}</span>
+              <button onClick={() => setMobileNavOpen(false)} className="text-white/90 hover:text-white p-1" aria-label="Close menu">
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Mobile search */}
+            <div className="p-3 border-b border-slate-100">
+              <div className="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded">
+                <Search size={15} className="text-slate-400" />
+                <input
+                  type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Search..."
+                  className="flex-1 bg-transparent text-slate-700 placeholder-slate-400 text-sm outline-none min-w-0" />
+              </div>
+              {searchQuery.length >= 2 && searchResults.length > 0 && (
+                <div className="mt-1 border border-slate-200 rounded bg-white max-h-56 overflow-auto">
+                  {searchResults.map((r, i) => (
+                    <button key={i} onClick={() => { const p = pathFor(r); if (p) { navigate(p); setMobileNavOpen(false); setSearchQuery(''); } }}
+                      className="w-full flex items-center gap-2 px-3 py-2 hover:bg-blue-50 text-left border-b border-slate-100 last:border-0">
+                      <span className="w-5">{iconFor(r.type)}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-slate-800 truncate">{r.name}</div>
+                        <div className="text-xs text-slate-500 capitalize">{r.type?.replace(/_/g,' ')} · {r.number}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Scrollable menu list */}
+            <div className="flex-1 overflow-auto">
+              <Link to="/" className="flex items-center gap-2 px-4 py-3 text-sm font-medium text-slate-700 border-b border-slate-100 hover:bg-slate-50">
+                <Home size={16} /> Home
+              </Link>
+
+              {visibleMenus.map(menu => {
+                const open = mobileExpanded === menu.label;
+                return (
+                  <div key={menu.label} className="border-b border-slate-100">
+                    {/* Top-level group */}
+                    <button
+                      onClick={() => { setMobileExpanded(open ? null : menu.label); setMobileExpandedItem(null); }}
+                      className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50">
+                      <span>{menu.label}</span>
+                      <ChevronDown size={16} className={`text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+                    </button>
+
+                    {/* Group items */}
+                    {open && (
+                      <div className="bg-slate-50/60 pb-1">
+                        {menu.items.map(item => {
+                          const hasSub = !!item.submenu && item.submenu.length > 0;
+                          const itemOpen = mobileExpandedItem === item.label;
+                          if (!hasSub) {
+                            return (
+                              <Link key={item.label} to={item.newPath}
+                                className="block px-6 py-2.5 text-sm text-slate-700 hover:bg-white">
+                                {item.label}
+                              </Link>
+                            );
+                          }
+                          return (
+                            <div key={item.label}>
+                              <button
+                                onClick={() => setMobileExpandedItem(itemOpen ? null : item.label)}
+                                className="w-full flex items-center justify-between px-6 py-2.5 text-sm text-slate-700 hover:bg-white">
+                                <span>{item.label}</span>
+                                <ChevronRight size={14} className={`text-slate-400 transition-transform ${itemOpen ? 'rotate-90' : ''}`} />
+                              </button>
+                              {itemOpen && (
+                                <div className="pb-1">
+                                  {(item.submenu || []).map(sub => (
+                                    <Link key={sub.path} to={sub.path}
+                                      className="block pl-10 pr-4 py-2 text-sm text-slate-600 hover:bg-white">
+                                      {sub.label}
+                                    </Link>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Drawer footer: user + sign out */}
+            <div className="border-t border-slate-200 p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0">
+                  <span className="text-white text-xs font-semibold">{user?.name?.charAt(0)?.toUpperCase()}</span>
+                </div>
+                <div className="leading-tight min-w-0">
+                  <div className="text-slate-700 text-sm font-medium truncate">{user?.name}</div>
+                  <div className="text-slate-500 text-xs truncate">{user?.companyCode} · {user?.roleName || 'Administrator'}</div>
+                </div>
+              </div>
+              <button onClick={handleLogout} className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-red-600 bg-red-50 rounded hover:bg-red-100">
+                <LogOut size={14} /> Sign Out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
