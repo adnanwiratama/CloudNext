@@ -47,8 +47,11 @@ services:
       # Same-origin requests go through the frontend nginx /api proxy, but list the
       # public domain too so direct API calls / tools are accepted.
       CORS_ORIGINS: ${PUBLIC_ORIGIN:-http://localhost:8080}
-    ports:
-      - "4000:4000"
+    # No host port mapping: the backend is reached only internally by the frontend
+    # nginx (/api → http://backend:4000) over the Docker network. This avoids host
+    # port 4000 conflicts with other apps on the server.
+    expose:
+      - "4000"
     depends_on:
       postgres:
         condition: service_healthy
