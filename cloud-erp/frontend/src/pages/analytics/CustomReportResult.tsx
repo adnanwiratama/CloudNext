@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Loader2, ArrowLeft } from 'lucide-react';
+import { Loader2, ArrowLeft, FileText } from 'lucide-react';
 import api from '../../services/api';
 import ReportExportBar from '../../components/common/ReportExportBar';
 import { ReportModel } from '../../utils/reportExport';
@@ -15,8 +15,9 @@ const fmtCell = (v: any, type: string) => {
   return String(v);
 };
 
-// Separate results page. Opened by the builder's Preview (ad-hoc config stashed in
-// sessionStorage) or by Run on a saved report (route /:id/result).
+// Results page — matches the standard transaction-list layout (sticky header,
+// max-w-screen-xl container, toolbar with total, and the standard table styling
+// using w-full text-sm so columns size to the container like list pages).
 export default function CustomReportResult() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
@@ -34,15 +35,13 @@ export default function CustomReportResult() {
       setLoading(true); setError(null);
       try {
         if (id) {
-          // Saved report run.
           const r = await api.post(`/api/reports/custom/${id}/run`, {});
           const d = r.data.data;
           setCols(d.columns || []); setRows(d.rows || []);
           setTitle(d.name || 'Custom Report');
-          setSubtitle(`${(d.recordType || '').replace(/_/g, ' ')} · ${(d.rows || []).length} row(s)`);
+          setSubtitle((d.recordType || '').replace(/_/g, ' '));
           setBackTo(`/analytics/custom-reports/${id}`);
         } else {
-          // Ad-hoc preview: read the config the builder stashed.
           const raw = sessionStorage.getItem('customReportPreview');
           if (!raw) { setError('No report configuration found. Go back and run again.'); setLoading(false); return; }
           const cfg = JSON.parse(raw);
@@ -50,7 +49,7 @@ export default function CustomReportResult() {
           const r = await api.post('/api/reports/custom/run', { type: cfg.type, columns: cfg.columns, filters: cfg.filters, sort: cfg.sort });
           const d = r.data.data;
           setCols(d.columns || []); setRows(d.rows || []);
-          setSubtitle(`${(cfg.typeLabel || cfg.type || '').replace(/_/g, ' ')} · ${(d.rows || []).length} row(s)`);
+          setSubtitle((cfg.typeLabel || cfg.type || '').replace(/_/g, ' '));
           setBackTo(cfg.backTo || '/analytics/custom-reports/new');
         }
       } catch (e: any) {
@@ -64,7 +63,7 @@ export default function CustomReportResult() {
     if (!cols.length) return null;
     return {
       title,
-      subtitle,
+      subtitle: `${subtitle} · ${rows.length} row(s)`,
       columns: cols.map(c => ({ label: c.label, align: c.type === 'number' ? 'right' as const : 'left' as const })),
       rows: rows.map(row => ({ cells: cols.map(c => fmtCell(row[c.key], c.type)) })),
     };
@@ -72,45 +71,62 @@ export default function CustomReportResult() {
 
   return (
     <div className="min-h-screen bg-gray-100">
+      {/* Standard sticky header */}
       <div className="bg-white border-b border-slate-200 sticky top-0 z-10">
-        <div className="max-w-screen-2xl mx-auto px-5 py-2 flex items-center justify-between gap-3">
+        <div className="max-w-screen-xl mx-auto px-4 py-2 flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0">
             <button onClick={() => navigate(backTo)} className="text-slate-500 hover:text-slate-700 flex-shrink-0"><ArrowLeft size={18} /></button>
+            <div className="w-8 h-8 rounded bg-blue-700 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">CR</div>
             <div className="min-w-0">
               <h1 className="text-xl font-semibold text-slate-800 truncate">{title}</h1>
-              {subtitle && <div className="text-xs text-slate-500">{subtitle}</div>}
+              {subtitle && <div className="text-xs text-slate-500 capitalize">{subtitle}</div>}
             </div>
           </div>
-          <ReportExportBar build={buildModel} disabled={!cols.length} />
+          <div className="flex items-center gap-5 text-sm text-blue-600">
+            <span onClick={() => navigate('/analytics/custom-reports')} className="hover:underline cursor-pointer">List</span>
+          </div>
         </div>
       </div>
 
-      <div className="max-w-screen-2xl mx-auto px-5 py-4">
-        {loading ? (
-          <div className="flex items-center justify-center h-64"><Loader2 size={28} className="animate-spin text-blue-500" /></div>
-        ) : error ? (
-          <div className="bg-white border border-red-200 rounded shadow-sm px-4 py-8 text-center text-red-600">{error}</div>
-        ) : cols.length === 0 ? (
-          <div className="bg-white border border-slate-200 rounded shadow-sm px-4 py-10 text-center text-slate-400">No results.</div>
-        ) : (
-          <div className="bg-white border border-slate-200 rounded shadow-sm overflow-x-auto">
-            <div className="px-4 py-2 border-b border-slate-200 text-sm font-medium text-slate-700">{rows.length} row(s)</div>
-            <table className="w-full text-sm min-w-max">
-              <thead>
-                <tr className="bg-slate-100 border-b border-slate-300 text-xs font-semibold text-slate-600 uppercase tracking-wide">
-                  {cols.map(c => <th key={c.key} className={`px-3 py-2 whitespace-nowrap ${c.type === 'number' ? 'text-right' : 'text-left'}`}>{c.label}</th>)}
+      <div className="p-4 max-w-screen-xl mx-auto space-y-3">
+        {/* Toolbar (export + total) — same shape as list-page toolbar */}
+        <div className="bg-white border border-slate-200 rounded shadow-sm px-4 py-2 flex items-center justify-between">
+          <ReportExportBar build={buildModel} disabled={!cols.length} />
+          <span className="text-slate-600 text-xs">Total: {rows.length.toLocaleString('id-ID')}</span>
+        </div>
+
+        {/* Table — standard list styling */}
+        <div className="bg-white border border-slate-200 rounded shadow-sm overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 border-b border-slate-200">
+                <tr>
+                  {cols.map(c => (
+                    <th key={c.key} className={`px-3 py-2.5 text-xs font-semibold text-slate-600 ${c.type === 'number' ? 'text-right' : 'text-left'}`}>{c.label}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row, i) => (
-                  <tr key={i} className="border-b border-slate-50 hover:bg-blue-50/40">
-                    {cols.map(c => <td key={c.key} className={`px-3 py-1.5 whitespace-nowrap ${c.type === 'number' ? 'text-right' : 'text-left'} text-slate-700`}>{fmtCell(row[c.key], c.type)}</td>)}
+                {loading ? (
+                  <tr><td colSpan={Math.max(cols.length, 1)} className="px-4 py-16 text-center"><Loader2 size={26} className="animate-spin text-blue-500 mx-auto" /></td></tr>
+                ) : error ? (
+                  <tr><td colSpan={Math.max(cols.length, 1)} className="px-4 py-12 text-center text-red-600">{error}</td></tr>
+                ) : rows.length === 0 ? (
+                  <tr><td colSpan={Math.max(cols.length, 1)} className="px-4 py-16 text-center">
+                    <FileText className="mx-auto mb-3 text-slate-300" size={40} />
+                    <p className="text-sm text-slate-500">No records found</p>
+                  </td></tr>
+                ) : rows.map((row, i) => (
+                  <tr key={i} className="border-t border-slate-100 hover:bg-slate-50 transition-colors">
+                    {cols.map(c => (
+                      <td key={c.key} className={`px-3 py-2 ${c.type === 'number' ? 'text-right' : 'text-left'} text-slate-700`}>{fmtCell(row[c.key], c.type) || '-'}</td>
+                    ))}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );
