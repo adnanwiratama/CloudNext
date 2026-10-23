@@ -71,8 +71,13 @@ router.put('/company/logo', requireAdmin, async (req: Request, res: Response): P
 let _userColsEnsured = false;
 async function ensureUserColumns(): Promise<void> {
   if (_userColsEnsured) return;
+  // Employee-record columns referenced by create/update user. The base schema
+  // doesn't include all of these, so ensure them (self-healing on fresh DBs).
   if (!(await db.schema.hasColumn('users', 'department_id'))) await db.schema.alterTable('users', (t: any) => t.uuid('department_id').nullable());
   if (!(await db.schema.hasColumn('users', 'location_id'))) await db.schema.alterTable('users', (t: any) => t.uuid('location_id').nullable());
+  if (!(await db.schema.hasColumn('users', 'employee_number'))) await db.schema.alterTable('users', (t: any) => t.string('employee_number', 50).nullable());
+  if (!(await db.schema.hasColumn('users', 'department'))) await db.schema.alterTable('users', (t: any) => t.string('department', 200).nullable());
+  if (!(await db.schema.hasColumn('users', 'position'))) await db.schema.alterTable('users', (t: any) => t.string('position', 200).nullable());
   _userColsEnsured = true;
 }
 
@@ -116,8 +121,9 @@ router.post('/users', requireAdmin, async (req: Request, res: Response): Promise
     }).returning(['id', 'name', 'email', 'phone', 'is_active', 'is_admin', 'role_id']);
     res.status(201).json({ success: true, data: user });
   } catch (e: any) {
+    console.error("[ERP ERROR] create user:", e.message, e.stack);
     if (e.code === '23505') res.status(409).json({ success: false, error: 'A user with this email already exists.' });
-    else res.status(500).json({ success: false, error: 'Failed to create user' });
+    else res.status(500).json({ success: false, error: `Failed to create user: ${e.message}` });
   }
 });
 
