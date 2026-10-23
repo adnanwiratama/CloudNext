@@ -122,6 +122,7 @@ async function runReport(opts: {
   type: string;
   columns: string[];                 // catalog keys like "h.order_number"
   filters: { field: string; op: string; value?: any; value2?: any }[];
+  sort?: { field: string; desc?: boolean }[];   // ordered sort keys (catalog keys)
   limit?: number;
 }): Promise<{ columns: CatalogColumn[]; rows: any[] }> {
   const cat = await buildCatalog(opts.type);
@@ -176,8 +177,18 @@ async function runReport(opts: {
     }
   }
 
-  // Stable ordering by the header's id (and line id if present) + a safety limit.
-  q.orderBy('h.created_at', 'desc');
+  // Ordering: honor user-chosen sort (whitelisted catalog columns), else fall back
+  // to the header's created_at desc for a stable default.
+  const sortRows = (opts.sort || []).filter(s => byKey[s.field]);
+  if (sortRows.length) {
+    for (const s of sortRows) {
+      const c = byKey[s.field];
+      const tbl = c.source === 'header' ? 'h' : 'l';
+      q.orderBy(`${tbl}.${c.column}`, s.desc ? 'desc' : 'asc');
+    }
+  } else {
+    q.orderBy('h.created_at', 'desc');
+  }
   q.limit(Math.min(opts.limit ?? 1000, 5000));
 
   const rows = await q;
@@ -193,9 +204,9 @@ async function runReport(opts: {
 // ── POST /run : run an ad-hoc report ─────────────────────────────────────────
 router.post('/run', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { type, columns, filters, limit } = req.body || {};
+    const { type, columns, filters, sort, limit } = req.body || {};
     if (!type) { res.status(400).json({ success: false, error: 'record type is required' }); return; }
-    const result = await runReport({ companyId: req.user!.companyId, type, columns: columns || [], filters: filters || [], limit });
+    const result = await runReport({ companyId: req.user!.companyId, type, columns: columns || [], filters: filters || [], sort: sort || [], limit });
     res.json({ success: true, data: result });
   } catch (e: any) { console.error('[ERP ERROR] custom-report run:', e.message, e.stack); res.status(500).json({ success: false, error: `Failed to run report: ${e.message}` }); }
 });
@@ -218,7 +229,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
 // ── POST / : save a report ───────────────────────────────────────────────────
 router.post('/', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { name, recordType, columns, filters, visibility, description } = req.body || {};
+    const { name, recordType, columns, filters, sort, visibility, description } = req.body || {};
     if (!name || !recordType) { res.status(400).json({ success: false, error: 'name and recordType are required' }); return; }
     if (!getImportType(recordType)) { res.status(400).json({ success: false, error: 'Unknown record type' }); return; }
     const vis = visibility === 'public' ? 'public' : 'private';
@@ -227,6 +238,7 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       name, record_type: recordType,
       columns: JSON.stringify(columns || []),
       filters: JSON.stringify(filters || []),
+      sort: JSON.stringify(sort || []),
       visibility: vis,
       description: description || null,
       created_by: req.user!.id,
@@ -245,7 +257,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
     if (!row) { res.status(404).json({ success: false, error: 'Report not found' }); return; }
     if (row.visibility !== 'public' && row.created_by !== uid) { res.status(403).json({ success: false, error: 'This report is private' }); return; }
     const parse = (v: any) => (typeof v === 'string' ? JSON.parse(v || '[]') : (v || []));
-    res.json({ success: true, data: { ...row, columns: parse(row.columns), filters: parse(row.filters), isOwner: row.created_by === uid } });
+    res.json({ success: true, data: { ...row, columns: parse(row.columns), filters: parse(row.filters), sort: parse(row.sort), isOwner: row.created_by === uid } });
   } catch (e: any) { console.error('[ERP ERROR] custom-report get:', e.message); res.status(500).json({ success: false, error: `Failed to load report: ${e.message}` }); }
 });
 
@@ -255,11 +267,12 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
     const row = await db('custom_reports').where({ id: req.params.id, company_id: req.user!.companyId }).first();
     if (!row) { res.status(404).json({ success: false, error: 'Report not found' }); return; }
     if (row.created_by !== req.user!.id) { res.status(403).json({ success: false, error: 'Only the creator can edit this report' }); return; }
-    const { name, columns, filters, visibility, description } = req.body || {};
+    const { name, columns, filters, sort, visibility, description } = req.body || {};
     const update: any = { updated_at: new Date() };
     if (name !== undefined) update.name = name;
     if (columns !== undefined) update.columns = JSON.stringify(columns);
     if (filters !== undefined) update.filters = JSON.stringify(filters);
+    if (sort !== undefined) update.sort = JSON.stringify(sort);
     if (visibility !== undefined) update.visibility = visibility === 'public' ? 'public' : 'private';
     if (description !== undefined) update.description = description || null;
     const [updated] = await db('custom_reports').where({ id: row.id }).update(update).returning('*');
@@ -288,7 +301,8 @@ router.post('/:id/run', async (req: Request, res: Response): Promise<void> => {
     const parse = (v: any) => (typeof v === 'string' ? JSON.parse(v || '[]') : (v || []));
     const columns = parse(row.columns);
     const filters = (req.body && req.body.filters) ? req.body.filters : parse(row.filters);
-    const result = await runReport({ companyId: req.user!.companyId, type: row.record_type, columns, filters, limit: req.body?.limit });
+    const sort = (req.body && req.body.sort) ? req.body.sort : parse(row.sort);
+    const result = await runReport({ companyId: req.user!.companyId, type: row.record_type, columns, filters, sort, limit: req.body?.limit });
     res.json({ success: true, data: { ...result, name: row.name, recordType: row.record_type } });
   } catch (e: any) { console.error('[ERP ERROR] custom-report saved run:', e.message); res.status(500).json({ success: false, error: `Failed to run report: ${e.message}` }); }
 });

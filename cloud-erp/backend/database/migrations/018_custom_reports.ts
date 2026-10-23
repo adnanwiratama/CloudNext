@@ -18,6 +18,7 @@ export async function up(knex: Knex): Promise<void> {
       t.string('record_type', 100).notNullable();      // e.g. 'sales_orders'
       t.jsonb('columns').notNullable().defaultTo('[]'); // ordered column keys/defs
       t.jsonb('filters').notNullable().defaultTo('[]'); // [{ field, op, value }]
+      t.jsonb('sort').notNullable().defaultTo('[]');    // [{ field, desc }]
       t.string('visibility', 20).notNullable().defaultTo('private'); // 'public' | 'private'
       t.text('description').nullable();
       t.uuid('created_by').nullable();
