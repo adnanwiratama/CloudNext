@@ -3,13 +3,10 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2, Plus, X, ChevronUp, ChevronDown, GripVertical, Play } from 'lucide-react';
 import api from '../../services/api';
-import ReportExportBar from '../../components/common/ReportExportBar';
-import { ReportModel } from '../../utils/reportExport';
 import toast from 'react-hot-toast';
 
 // ── Types mirroring the backend contract ─────────────────────────────────────
 interface CatalogCol { key: string; column: string; source: 'header' | 'line'; label: string; type: 'string' | 'number' | 'boolean' | 'date'; }
-interface RunCol extends CatalogCol { }
 interface FilterRow { field: string; op: string; value?: string; value2?: string; }
 interface SortRow { field: string; desc: boolean; }
 
@@ -29,14 +26,6 @@ const OPERATORS: { value: string; label: string; needsValue: boolean; needsTwo?:
   { value: 'is_not_empty', label: 'is not empty', needsValue: false },
 ];
 
-const fmtCell = (v: any, type: string) => {
-  if (v == null || v === '') return '';
-  if (type === 'number') { const n = Number(v); return isNaN(n) ? String(v) : n.toLocaleString('id-ID', { maximumFractionDigits: 4 }); }
-  if (type === 'date') { const d = new Date(v); return isNaN(d.getTime()) ? String(v) : d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }); }
-  if (type === 'boolean') return v ? 'Yes' : 'No';
-  return String(v);
-};
-
 type Tab = 'criteria' | 'results';
 
 export default function CustomReportBuilder() {
@@ -55,11 +44,7 @@ export default function CustomReportBuilder() {
   const [loadedId, setLoadedId] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('results');
 
-  const [runCols, setRunCols] = useState<RunCol[]>([]);
-  const [runRows, setRunRows] = useState<any[]>([]);
-  const [running, setRunning] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [showResults, setShowResults] = useState(false);
 
   const { data: types } = useQuery({
     queryKey: ['custom-report-types'],
@@ -98,7 +83,6 @@ export default function CustomReportBuilder() {
   const changeType = (t: string) => {
     setRecordType(t); setSelectedKeys([]); setFilters([]);
     setSort([{ field: '', desc: false }, { field: '', desc: false }, { field: '', desc: false }]);
-    setRunCols([]); setRunRows([]); setShowResults(false);
   };
 
   const addColumn = (key: string) => setSelectedKeys(prev => prev.includes(key) ? prev : [...prev, key]);
@@ -118,34 +102,25 @@ export default function CustomReportBuilder() {
 
   const buildPayloadSort = () => sort.filter(s => s.field).map(s => ({ field: s.field, desc: s.desc }));
 
-  const run = async () => {
+  // Preview the current (unsaved) config → stash it and open the results page.
+  const run = () => {
     if (!recordType) { toast.error('Pick a record type first'); return; }
-    setRunning(true);
-    try {
-      const body = { type: recordType, columns: selectedKeys, filters: filters.filter(f => f.field && f.op), sort: buildPayloadSort() };
-      const r = await api.post('/api/reports/custom/run', body);
-      setRunCols(r.data.data.columns || []);
-      setRunRows(r.data.data.rows || []);
-      setShowResults(true);
-      if ((r.data.data.rows || []).length === 0) toast('No rows matched', { icon: 'ℹ️' });
-    } catch (e: any) {
-      toast.error(e.response?.data?.error || 'Failed to run report');
-    } finally { setRunning(false); }
+    sessionStorage.setItem('customReportPreview', JSON.stringify({
+      type: recordType,
+      typeLabel: fieldData?.label || recordType,
+      name: name.trim() || 'Custom Report (Preview)',
+      columns: selectedKeys,
+      filters: filters.filter(f => f.field && f.op),
+      sort: buildPayloadSort(),
+      backTo: loadedId ? `/analytics/custom-reports/${loadedId}` : '/analytics/custom-reports/new',
+    }));
+    navigate('/analytics/custom-reports/result');
   };
 
-  // Run the SAVED definition (server-side), used by the Run button on a loaded report.
-  const runSaved = async () => {
+  // Run the SAVED definition → open the results page for this report.
+  const runSaved = () => {
     if (!loadedId) return run();
-    setRunning(true);
-    try {
-      const r = await api.post(`/api/reports/custom/${loadedId}/run`, {});
-      setRunCols(r.data.data.columns || []);
-      setRunRows(r.data.data.rows || []);
-      setShowResults(true);
-      if ((r.data.data.rows || []).length === 0) toast('No rows matched', { icon: 'ℹ️' });
-    } catch (e: any) {
-      toast.error(e.response?.data?.error || 'Failed to run report');
-    } finally { setRunning(false); }
+    navigate(`/analytics/custom-reports/${loadedId}/result`);
   };
 
   const save = async () => {
@@ -167,16 +142,6 @@ export default function CustomReportBuilder() {
     } finally { setSaving(false); }
   };
 
-  const buildModel = (): ReportModel | null => {
-    if (!runCols.length) return null;
-    return {
-      title: name || 'Custom Report',
-      subtitle: `${fieldData?.label || recordType} · ${runRows.length} row(s)`,
-      columns: runCols.map(c => ({ label: c.label, align: c.type === 'number' ? 'right' as const : 'left' as const })),
-      rows: runRows.map(row => ({ cells: runCols.map(c => fmtCell(row[c.key], c.type)) })),
-    };
-  };
-
   if (isExisting && loadingExisting) {
     return <div className="flex items-center justify-center h-64"><Loader2 size={28} className="animate-spin text-blue-500" /></div>;
   }
@@ -192,7 +157,7 @@ export default function CustomReportBuilder() {
       <div className="bg-white border-b border-slate-200">
         <div className="max-w-screen-2xl mx-auto px-5 pt-3">
           <div className="flex items-start justify-between">
-            <h1 className="text-xl font-bold text-slate-800">Saved Transaction Search</h1>
+            <h1 className="text-xl font-bold text-slate-800">Custom Report</h1>
             <div className="flex items-center gap-4 text-sm text-blue-600">
               <button onClick={() => navigate('/analytics/custom-reports')} className="hover:underline">List</button>
               <span className="text-slate-300">|</span>
@@ -209,14 +174,13 @@ export default function CustomReportBuilder() {
             )}
             <button onClick={() => navigate('/analytics/custom-reports')} className="px-4 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Cancel</button>
             {loadedId && (
-              <button onClick={runSaved} disabled={running} className="flex items-center gap-1.5 px-4 py-1.5 bg-emerald-600 text-white text-sm font-medium rounded hover:bg-emerald-700 disabled:opacity-60">
-                {running ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />} Run
+              <button onClick={runSaved} className="flex items-center gap-1.5 px-4 py-1.5 bg-emerald-600 text-white text-sm font-medium rounded hover:bg-emerald-700">
+                <Play size={13} /> Run
               </button>
             )}
-            <button onClick={run} disabled={running || !recordType} className="px-4 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50 disabled:opacity-60 flex items-center gap-1.5">
-              {running && <Loader2 size={13} className="animate-spin" />} Preview
+            <button onClick={run} disabled={!recordType} className="px-4 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50 disabled:opacity-60 flex items-center gap-1.5">
+              <Play size={13} /> Preview
             </button>
-            <div className="ml-auto"><ReportExportBar build={buildModel} disabled={!runCols.length} /></div>
           </div>
 
           {/* Title / ID / type + checkboxes */}
@@ -246,12 +210,6 @@ export default function CustomReportBuilder() {
                 <span className="font-medium">Public</span>
                 <span className="text-xs text-slate-400">(visible to everyone — otherwise private to you)</span>
               </label>
-              {/* Visual-only options to match NetSuite layout */}
-              {['Available as List View', 'Available for Reminders', 'Show in Menu'].map(l => (
-                <label key={l} className="flex items-center gap-2 text-sm text-slate-400">
-                  <input type="checkbox" disabled className="w-4 h-4" /> {l}
-                </label>
-              ))}
             </div>
           </div>
         </div>
@@ -398,31 +356,6 @@ export default function CustomReportBuilder() {
                 })}
               </tbody>
             </table>
-          </div>
-        )}
-
-        {/* ═══ Preview results ═══ */}
-        {showResults && (
-          <div className="bg-white border border-slate-200 rounded shadow-sm overflow-x-auto">
-            <div className="px-4 py-2 border-b border-slate-200 text-sm font-medium text-slate-700">Preview · {runRows.length} row(s)</div>
-            {runCols.length === 0 ? (
-              <div className="px-4 py-8 text-center text-slate-400">No results.</div>
-            ) : (
-              <table className="w-full text-sm min-w-max">
-                <thead>
-                  <tr className="bg-slate-100 border-b border-slate-300 text-xs font-semibold text-slate-600 uppercase tracking-wide">
-                    {runCols.map(c => <th key={c.key} className={`px-3 py-2 whitespace-nowrap ${c.type === 'number' ? 'text-right' : 'text-left'}`}>{c.label}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {runRows.map((row, i) => (
-                    <tr key={i} className="border-b border-slate-50 hover:bg-blue-50/40">
-                      {runCols.map(c => <td key={c.key} className={`px-3 py-1.5 whitespace-nowrap ${c.type === 'number' ? 'text-right' : 'text-left'} text-slate-700`}>{fmtCell(row[c.key], c.type)}</td>)}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
           </div>
         )}
       </div>

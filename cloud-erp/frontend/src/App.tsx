@@ -5,6 +5,7 @@ import LoginPage from './pages/auth/LoginPage';
 import Dashboard from './pages/dashboard/Dashboard';
 import CustomReportList from './pages/analytics/CustomReportList';
 import CustomReportBuilder from './pages/analytics/CustomReportBuilder';
+import CustomReportResult from './pages/analytics/CustomReportResult';
 
 // CRM
 import CustomerList from './pages/customers/CustomerList';
@@ -204,6 +205,8 @@ export default function App() {
         {/* ── ANALYTICS · CUSTOM REPORTS ── */}
         <Route path="analytics/custom-reports" element={<CustomReportList />} />
         <Route path="analytics/custom-reports/new" element={<CustomReportBuilder />} />
+        <Route path="analytics/custom-reports/result" element={<CustomReportResult />} />
+        <Route path="analytics/custom-reports/:id/result" element={<CustomReportResult />} />
         <Route path="analytics/custom-reports/:id" element={<CustomReportBuilder />} />
         <Route path="analytics/custom-reports/:id/edit" element={<CustomReportBuilder />} />
 
