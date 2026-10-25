@@ -4,6 +4,7 @@ import { authenticate } from '../../middleware/auth';
 import { enforcePermissions } from '../../middleware/permissions';
 import { AccountingEngine } from '../../engines/accounting/accountingEngine';
 import { fetchJEWithLines } from '../../utils/transactionAudit';
+import { resolveApprover } from '../../utils/approvals';
 
 const router = Router();
 router.use(authenticate);
@@ -201,9 +202,10 @@ router.post('/expenses/:id/approve', async (req: Request, res: Response): Promis
       res.status(400).json({ success: false, error: `Report is already ${existing.status}.` }); return;
     }
 
+    const erApprover = await resolveApprover(companyId, 'expense_reports', req.user!.id);
     const result = await db.transaction(async (trx) => {
       const [report] = await trx('expense_reports').where({ id: existing.id })
-        .update({ status: 'approved', approved_by: req.user!.id, approved_at: new Date() })
+        .update({ status: 'approved', approved_by: erApprover, approved_at: new Date() })
         .returning('*');
 
       // ── GL on approval: Dr. each line's expense account / Cr. the header payable account ──

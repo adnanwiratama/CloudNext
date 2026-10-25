@@ -9,6 +9,7 @@ import { attachAuditRoute, logTransaction, fetchJEWithLines } from '../../utils/
 import { AccountingEngine } from '../../engines/accounting/accountingEngine';
 import { InventoryEngine } from '../../engines/inventory/inventoryEngine';
 import { AppError } from '../../middleware/errorHandler';
+import { resolveApprover } from '../../utils/approvals';
 
 const router = Router();
 router.use(authenticate);
@@ -410,8 +411,9 @@ router.post('/requisitions/:id/approve', async (req: Request, res: Response): Pr
   try {
     const pr = await db('purchase_requisitions').where({ id: req.params.id, company_id: req.user!.companyId }).first();
     if (!pr) { res.status(404).json({ success: false, error: 'Requisition not found' }); return; }
+    const prApprover = await resolveApprover(req.user!.companyId, 'purchase_requisitions', req.user!.id);
     const [updated] = await db('purchase_requisitions').where({ id: pr.id })
-      .update({ status: 'approved', approved_by: req.user!.id, approved_at: new Date() }).returning('*');
+      .update({ status: 'approved', approved_by: prApprover, approved_at: new Date() }).returning('*');
     res.json({ success: true, data: updated });
   } catch (e: any) { console.error("[ERP ERROR]", e.message, e.stack); res.status(500).json({ success: false, error: 'Failed to approve requisition' }); }
 });
@@ -594,8 +596,9 @@ router.post('/orders/:id/approve', async (req: Request, res: Response): Promise<
     if (po.status !== 'pending_approval') {
       res.status(400).json({ success: false, error: `Cannot approve PO with status: ${po.status}` }); return;
     }
+    const poApprover = await resolveApprover(req.user!.companyId, 'purchase_orders', req.user!.id);
     const [updated] = await db('purchase_orders').where({ id: po.id })
-      .update({ status: 'pending_receipt', approved_by: req.user!.id, approved_at: new Date() }).returning('*');
+      .update({ status: 'pending_receipt', approved_by: poApprover, approved_at: new Date() }).returning('*');
     res.json({ success: true, data: updated, message: 'Purchase order approved' });
   } catch (e: any) { console.error("[ERP ERROR]", e.message); res.status(500).json({ success: false, error: 'Failed to approve PO' }); }
 });

@@ -9,6 +9,7 @@ import { attachAuditRoute, logTransaction, fetchJEWithLines } from '../../utils/
 import { AccountingEngine } from '../../engines/accounting/accountingEngine';
 import { InventoryEngine } from '../../engines/inventory/inventoryEngine';
 import { AppError } from '../../middleware/errorHandler';
+import { resolveApprover } from '../../utils/approvals';
 
 const router = Router();
 router.use(authenticate);
@@ -407,6 +408,7 @@ router.post('/quotations/:id/convert', async (req: Request, res: Response): Prom
     const shipping = num(qt.shipping_amount, 0);
 
     const soNumber = await generateTransactionNumber(companyId, 'sales_order', db);
+    const soApprover = await resolveApprover(companyId, 'sales_orders', req.user!.id);
     const [so] = await db('sales_orders').insert({
       company_id: companyId, subsidiary_id: qt.subsidiary_id, so_number: soNumber,
       quotation_id: qt.id, customer_id: qt.customer_id, order_date: new Date().toISOString().split('T')[0],
@@ -415,7 +417,7 @@ router.post('/quotations/:id/convert', async (req: Request, res: Response): Prom
       status: 'pending_fulfillment', memo: qt.memo,
       subtotal, discount_amount: discountTotal, tax_amount: taxTotal,
       shipping_amount: shipping, total_amount: subtotal + taxTotal + shipping,
-      approved_by: req.user!.id, approved_at: new Date(), created_by: req.user!.id,
+      approved_by: soApprover, approved_at: new Date(), created_by: req.user!.id,
     }).returning('*');
     if (soLines.length > 0) {
       await db('sales_order_lines').insert(soLines.map((l: any) => ({ so_id: so.id, ...l })));
@@ -644,8 +646,9 @@ router.post('/orders/:id/approve', async (req: Request, res: Response): Promise<
     if (so.status !== 'pending_approval') {
       res.status(400).json({ success: false, error: `Cannot approve a sales order with status: ${so.status}` }); return;
     }
+    const soApprover = await resolveApprover(req.user!.companyId, 'sales_orders', req.user!.id);
     const [updated] = await db('sales_orders').where({ id: so.id })
-      .update({ status: 'pending_fulfillment', approved_by: req.user!.id, approved_at: new Date() })
+      .update({ status: 'pending_fulfillment', approved_by: soApprover, approved_at: new Date() })
       .returning('*');
 
     // Commit inventory on approval so Available (on_hand − committed) reduces now.
