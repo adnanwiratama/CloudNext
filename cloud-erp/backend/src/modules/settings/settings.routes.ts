@@ -78,6 +78,7 @@ async function ensureUserColumns(): Promise<void> {
   if (!(await db.schema.hasColumn('users', 'employee_number'))) await db.schema.alterTable('users', (t: any) => t.string('employee_number', 50).nullable());
   if (!(await db.schema.hasColumn('users', 'department'))) await db.schema.alterTable('users', (t: any) => t.string('department', 200).nullable());
   if (!(await db.schema.hasColumn('users', 'position'))) await db.schema.alterTable('users', (t: any) => t.string('position', 200).nullable());
+  if (!(await db.schema.hasColumn('users', 'supervisor_id'))) await db.schema.alterTable('users', (t: any) => t.uuid('supervisor_id').nullable());
   _userColsEnsured = true;
 }
 
@@ -90,7 +91,7 @@ router.get('/users', async (req: Request, res: Response): Promise<void> => {
       .leftJoin('locations as loc', 'u.location_id', 'loc.id')
       .where({ 'u.company_id': req.user!.companyId })
       .select('u.id', 'u.name', 'u.email', 'u.phone', 'u.is_active', 'u.is_admin', 'u.last_login_at',
-        'u.employee_number', 'u.department', 'u.position', 'u.role_id', 'u.department_id', 'u.location_id', 'u.subsidiary_id',
+        'u.employee_number', 'u.department', 'u.position', 'u.role_id', 'u.department_id', 'u.location_id', 'u.subsidiary_id', 'u.supervisor_id',
         'r.name as role_name', 's.name as subsidiary_name',
         db.raw('COALESCE(dep.name, u.department) as department_name'), 'loc.name as location_name')
       .orderBy('u.name');
@@ -116,7 +117,7 @@ router.post('/users', requireAdmin, async (req: Request, res: Response): Promise
       password_hash: hash, phone: d.phone, role_id: d.roleId || null,
       subsidiary_id: d.subsidiaryId || null,
       employee_number: d.employeeNumber || null, department: d.department || null, position: d.position || null,
-      department_id: d.departmentId || null, location_id: d.locationId || null,
+      department_id: d.departmentId || null, location_id: d.locationId || null, supervisor_id: d.supervisorId || null,
       is_active: d.giveAccess === false ? false : (d.isActive !== false), is_admin: d.isAdmin || false,
     }).returning(['id', 'name', 'email', 'phone', 'is_active', 'is_admin', 'role_id']);
     res.status(201).json({ success: true, data: user });
@@ -136,6 +137,7 @@ router.put('/users/:id', requireAdmin, async (req: Request, res: Response): Prom
     if (d.department !== undefined) update.department = d.department || null;
     if (d.departmentId !== undefined) update.department_id = d.departmentId || null;
     if (d.locationId !== undefined) update.location_id = d.locationId || null;
+    if (d.supervisorId !== undefined) update.supervisor_id = d.supervisorId || null;
     if (d.position !== undefined) update.position = d.position || null;
     if (d.password) update.password_hash = await bcrypt.hash(d.password, 12);
     const [updated] = await db('users').where({ id: req.params.id, company_id: req.user!.companyId }).update(update).returning(['id', 'name', 'email', 'is_active', 'is_admin']);
@@ -577,6 +579,66 @@ router.put('/notifications/:id/read', async (req: Request, res: Response): Promi
     await db('notifications').where({ id: req.params.id, user_id: req.user!.id }).update({ is_read: true });
     res.json({ success: true });
   } catch (e: any) { console.error("[ERP ERROR]", e.message, e.stack); res.status(500).json({ success: false, error: 'Failed to mark notification' }); }
+});
+
+// ─── Approval Settings (default approver per transaction type) ────────────────
+// Ensure the table exists even if migrations haven't been run on this DB.
+let _approvalEnsured = false;
+async function ensureApprovalTable(): Promise<void> {
+  if (_approvalEnsured) return;
+  if (!(await db.schema.hasTable('approval_settings'))) {
+    await db.schema.createTable('approval_settings', (t: any) => {
+      t.uuid('id').primary().defaultTo(db.raw('gen_random_uuid()'));
+      t.uuid('company_id').notNullable();
+      t.string('record_type', 100).notNullable();
+      t.uuid('approver_user_id').nullable();
+      t.timestamp('updated_at').defaultTo(db.fn.now());
+      t.unique(['company_id', 'record_type']);
+    });
+  }
+  _approvalEnsured = true;
+}
+
+// GET all transaction types with their currently-configured approver.
+router.get('/approvals', async (req: Request, res: Response): Promise<void> => {
+  try {
+    await ensureApprovalTable();
+    const companyId = req.user!.companyId;
+    const rows = await db('approval_settings').where({ company_id: companyId });
+    const byType: Record<string, string | null> = {};
+    for (const r of rows as any[]) byType[r.record_type] = r.approver_user_id;
+    // Only transaction types are approvable.
+    const types = IMPORT_TYPES.filter((t: ImportTypeDef) => t.category === 'Transactions')
+      .map((t: ImportTypeDef) => ({ value: t.value, label: t.label, approverUserId: byType[t.value] || null }));
+    res.json({ success: true, data: types });
+  } catch (e: any) { console.error('[ERP ERROR] approvals get:', e.message); res.status(500).json({ success: false, error: `Failed to load approvals: ${e.message}` }); }
+});
+
+// PUT upsert the approver map: body { approvals: [{ recordType, approverUserId }] }.
+router.put('/approvals', requireAdmin, async (req: Request, res: Response): Promise<void> => {
+  try {
+    await ensureApprovalTable();
+    const companyId = req.user!.companyId;
+    const list: { recordType: string; approverUserId?: string | null }[] = req.body?.approvals || [];
+    const validTypes = new Set(IMPORT_TYPES.filter(t => t.category === 'Transactions').map(t => t.value));
+    for (const row of list) {
+      if (!validTypes.has(row.recordType)) continue;
+      await db('approval_settings')
+        .insert({ company_id: companyId, record_type: row.recordType, approver_user_id: row.approverUserId || null, updated_at: new Date() })
+        .onConflict(['company_id', 'record_type'])
+        .merge({ approver_user_id: row.approverUserId || null, updated_at: new Date() });
+    }
+    res.json({ success: true, message: 'Approval settings saved' });
+  } catch (e: any) { console.error('[ERP ERROR] approvals put:', e.message); res.status(500).json({ success: false, error: `Failed to save approvals: ${e.message}` }); }
+});
+
+// GET the configured approver for one type (for transaction forms, Phase 2).
+router.get('/approvals/:type', async (req: Request, res: Response): Promise<void> => {
+  try {
+    await ensureApprovalTable();
+    const row = await db('approval_settings').where({ company_id: req.user!.companyId, record_type: req.params.type }).first();
+    res.json({ success: true, data: { recordType: req.params.type, approverUserId: row?.approver_user_id || null } });
+  } catch (e: any) { console.error('[ERP ERROR] approvals get one:', e.message); res.status(500).json({ success: false, error: `Failed: ${e.message}` }); }
 });
 
 export default router;

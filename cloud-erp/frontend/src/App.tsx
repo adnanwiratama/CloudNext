@@ -159,6 +159,7 @@ import InventoryActivityReport from './pages/reports/InventoryActivityReport';
 import SettingsPage from './pages/settings/SettingsPage';
 import ManageUsersPage from './pages/settings/ManageUsersPage';
 import ManageRolesPage from './pages/settings/ManageRolesPage';
+import ApprovalSettingsPage from './pages/settings/ApprovalSettingsPage';
 import CompanySettingsPage from './pages/settings/CompanySettingsPage';
 import AccountingPeriodsPage from './pages/settings/AccountingPeriodsPage';
 import TaxCodePage from './pages/settings/TaxCodePage';
@@ -388,6 +389,7 @@ export default function App() {
 
         {/* ── SETTINGS ── */}
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="settings/approvals" element={<ApprovalSettingsPage />} />
         <Route path="settings/users" element={<ManageUsersPage />} />
         <Route path="settings/roles" element={<ManageRolesPage />} />
         <Route path="settings/company" element={<CompanySettingsPage />} />

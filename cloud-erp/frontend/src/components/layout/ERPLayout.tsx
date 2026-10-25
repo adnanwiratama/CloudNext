@@ -324,6 +324,13 @@ const NAV_MENUS: NavMenu[] = [
           { label: 'Manager Roles',path: '/settings/roles', isList: true },
         ],
       },
+      {
+        label: 'Approvals',
+        newPath: '/settings/approvals',
+        submenu: [
+          { label: 'Approval Settings', path: '/settings/approvals', isList: true },
+        ],
+      },
     ],
   },
   {

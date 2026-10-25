@@ -19,10 +19,12 @@ export default function EmployeeForm() {
   const { data: roles = [] } = useQuery({ queryKey: ['roles'], queryFn: () => api.get('/api/settings/roles').then(r => r.data.data || []) });
   const { data: subsidiariesData } = useQuery({ queryKey: ['subsidiaries'], queryFn: () => api.get('/api/settings/subsidiaries').then(r => r.data.data || []) });
   const subsidiaries: any[] = subsidiariesData || [];
+  // All users — options for the Supervisor dropdown (specific user).
+  const { data: allUsers = [] } = useQuery({ queryKey: ['users-for-supervisor'], queryFn: () => api.get('/api/settings/users', { params: { limit: 500 } }).then(r => r.data.data || []) });
 
   const [form, setForm] = useState({
     employeeNumber: '', name: '', position: '', departmentId: '', locationId: '',
-    email: '', phone: '', subsidiaryId: '', notes: '',
+    email: '', phone: '', subsidiaryId: '', supervisorId: '', notes: '',
     giveAccess: false, password: '', confirmPassword: '', roleId: '', isAdmin: false, isActive: true,
   });
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
@@ -38,7 +40,7 @@ export default function EmployeeForm() {
         ...f,
         employeeNumber: u.employee_number || '', name: u.name || '', position: u.position || '',
         departmentId: u.department_id || '', locationId: u.location_id || '',
-        email: u.email || '', phone: u.phone || '', subsidiaryId: u.subsidiary_id || '',
+        email: u.email || '', phone: u.phone || '', subsidiaryId: u.subsidiary_id || '', supervisorId: u.supervisor_id || '',
         giveAccess: !!u.is_active, roleId: u.role_id || '', isAdmin: !!u.is_admin, isActive: !!u.is_active,
       }));
       setInitialized(true);
@@ -61,7 +63,7 @@ export default function EmployeeForm() {
       employeeNumber: form.employeeNumber || null, position: form.position || null,
       departmentId: form.departmentId || null, locationId: form.locationId || null,
       department: departments.find((d: any) => d.id === form.departmentId)?.name || null,
-      subsidiaryId: form.subsidiaryId || null,
+      subsidiaryId: form.subsidiaryId || null, supervisorId: form.supervisorId || null,
       giveAccess: form.giveAccess, isActive: form.giveAccess,
       password: form.password || undefined, roleId: form.giveAccess ? (form.roleId || null) : null,
       isAdmin: form.giveAccess ? form.isAdmin : false,
@@ -131,7 +133,15 @@ export default function EmployeeForm() {
                   </div>
                 </div>
                 <div className="space-y-3">
-                  <div><label className={lbl}>Notes</label><textarea className={`${dis} resize-none`} rows={4} value={form.notes} onChange={e => set('notes', e.target.value)}/></div>
+                  <div><label className={lbl}>Supervisor</label>
+                    <select className={sel} value={form.supervisorId} onChange={e => set('supervisorId', e.target.value)}>
+                      <option value="">-- Select Supervisor --</option>
+                      {(allUsers as any[]).filter((u: any) => u.id !== id).map((u: any) => (
+                        <option key={u.id} value={u.id}>{u.name}{u.role_name ? ` (${u.role_name})` : ''}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div><label className={lbl}>Notes</label><textarea className={`${dis} resize-none`} rows={3} value={form.notes} onChange={e => set('notes', e.target.value)}/></div>
                 </div>
               </div>
             </div>
