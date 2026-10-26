@@ -27,6 +27,11 @@ interface CreateJournalParams {
   lines: JournalLine[];
   createdBy: string;
   trx: any;
+  // When true, the journal entry is created with status 'non_posting': it appears
+  // in the transaction's GL Impact tab but is EXCLUDED from all financial reports
+  // (every report query filters status='posted'). Used for pending-approval records;
+  // the approve step flips it to 'posted'. Default false = posted immediately.
+  nonPosting?: boolean;
 }
 
 export class AccountingEngine {
@@ -38,6 +43,7 @@ export class AccountingEngine {
     const {
       companyId, subsidiaryId, date, currency = 'IDR', exchangeRate = 1,
       type = 'system', sourceType, sourceId, memo, lines, createdBy, trx,
+      nonPosting = false,
     } = params;
 
     const totalDebit = lines.reduce((s, l) => s + (l.debit || 0), 0);
@@ -67,7 +73,11 @@ export class AccountingEngine {
       journal_number: journalNumber, entry_date: date, period_id: period?.id,
       currency, exchange_rate: exchangeRate, type,
       source_type: sourceType, source_id: sourceId, memo,
-      status: 'posted', posted_by: createdBy, posted_at: new Date(), created_by: createdBy,
+      // Non-posting entries are deferred until approval; they stay out of reports.
+      status: nonPosting ? 'non_posting' : 'posted',
+      posted_by: nonPosting ? null : createdBy,
+      posted_at: nonPosting ? null : new Date(),
+      created_by: createdBy,
     }).returning('*');
 
     const lineInserts = lines.map((line, idx) => ({
@@ -91,6 +101,18 @@ export class AccountingEngine {
   static async getDefaultAccount(companyId: string, code: string, trx: any): Promise<string | null> {
     const acct = await trx('accounts').where({ company_id: companyId, code, is_active: true }).first();
     return acct?.id || null;
+  }
+
+  /**
+   * Flip all NON-POSTING journal entries for a source record to 'posted' (used by
+   * the approval step). Only touches status='non_posting' rows, so it's a no-op for
+   * records that were posted immediately. Returns the number of entries posted.
+   */
+  static async postDeferredJournal(sourceType: string, sourceId: string, userId: string, trx: any): Promise<number> {
+    const n = await trx('journal_entries')
+      .where({ source_type: sourceType, source_id: sourceId, status: 'non_posting' })
+      .update({ status: 'posted', posted_by: userId, posted_at: new Date() });
+    return n;
   }
 
   // ─── TASK 1 & 2: Item Fulfillment GL ─────────────────────────────────────────

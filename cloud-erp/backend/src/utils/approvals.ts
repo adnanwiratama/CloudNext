@@ -21,3 +21,28 @@ export async function resolveApprover(companyId: string, recordType: string, act
   const configured = await getConfiguredApprover(companyId, recordType);
   return configured || actingUserId;
 }
+
+// ─── Approval-gated posting ──────────────────────────────────────────────────
+// A transaction type REQUIRES approval only when an approver is configured for it
+// (Option A: conditional). Types without a configured approver keep posting
+// immediately on create, exactly as before (backward compatible).
+export async function isApprovalRequired(companyId: string, recordType: string): Promise<boolean> {
+  const configured = await getConfiguredApprover(companyId, recordType);
+  return !!configured;
+}
+
+// Decide the create-time state for a new record of `recordType`:
+//   { approvalRequired, approvalStatus, nonPosting }
+// - approvalRequired=true  → approvalStatus 'pending_approval', nonPosting=true
+//   (GL created as non-posting, inventory deferred; approve step finalizes).
+// - approvalRequired=false → approvalStatus 'approved', nonPosting=false
+//   (posts immediately, legacy behavior).
+export async function creationApprovalState(companyId: string, recordType: string): Promise<{
+  approvalRequired: boolean; approvalStatus: string; nonPosting: boolean;
+}> {
+  const approvalRequired = await isApprovalRequired(companyId, recordType);
+  return approvalRequired
+    ? { approvalRequired: true, approvalStatus: 'pending_approval', nonPosting: true }
+    : { approvalRequired: false, approvalStatus: 'approved', nonPosting: false };
+}
+
