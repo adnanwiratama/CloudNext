@@ -38,3 +38,5 @@ yarn-error.log*
 *.swp
 coverage/
 .cache/
+localhost_db_dump.sql
+dumperr.txt
