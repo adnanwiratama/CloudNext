@@ -9,7 +9,7 @@ import { attachAuditRoute, logTransaction, fetchJEWithLines } from '../../utils/
 import { AccountingEngine } from '../../engines/accounting/accountingEngine';
 import { InventoryEngine } from '../../engines/inventory/inventoryEngine';
 import { AppError } from '../../middleware/errorHandler';
-import { resolveApprover } from '../../utils/approvals';
+import { resolveApprover, creationApprovalState } from '../../utils/approvals';
 
 const router = Router();
 router.use(authenticate);
@@ -943,6 +943,7 @@ router.get('/invoices/:id', async (req: Request, res: Response): Promise<void> =
       .leftJoin('locations as l', 'i.location_id', 'l.id')
       .where({ 'i.id': req.params.id, 'i.company_id': req.user!.companyId });
     const invSelect: any[] = ['i.*', 'c.name as customer_name', 'c.email as customer_email', 'c.address as billing_address', 'c.tax_id as customer_tax_id', 'l.name as location_name'];
+    invQuery.leftJoin('users as ab', 'i.approved_by', 'ab.id'); invSelect.push('ab.name as approved_by_name');
     if (invHasDept) { invQuery.leftJoin('departments as dep', 'i.department_id', 'dep.id'); invSelect.push('dep.name as department_name'); }
     if (invHasSub)  { invQuery.leftJoin('subsidiaries as sub', 'i.subsidiary_id', 'sub.id'); invSelect.push('sub.name as subsidiary_name'); }
     const inv = await invQuery.select(invSelect).first();
@@ -959,11 +960,68 @@ router.get('/invoices/:id', async (req: Request, res: Response): Promise<void> =
   } catch (e: any) { console.error("[ERP ERROR]", e.message, e.stack); res.status(500).json({ success: false, error: 'Failed to fetch invoice' }); }
 });
 
+// Approve Invoice — posts the deferred (non-posting) GL + runs the deferred
+// standalone stock-out, then stamps the configured approver.
+router.post('/invoices/:id/approve', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const companyId = req.user!.companyId;
+    const inv = await db('invoices').where({ id: req.params.id, company_id: companyId, is_deleted: false }).first();
+    if (!inv) { res.status(404).json({ success: false, error: 'Invoice not found' }); return; }
+    if (inv.approval_status !== 'pending_approval') {
+      res.status(400).json({ success: false, error: `Invoice is not pending approval (status: ${inv.approval_status || 'approved'})` }); return;
+    }
+    const approver = await resolveApprover(companyId, 'invoices', req.user!.id);
+    await db.transaction(async (trx) => {
+      // 1) Flip the non-posting GL → posted.
+      await AccountingEngine.postDeferredJournal('invoice', inv.id, req.user!.id, trx);
+      // 2) Run the deferred standalone stock-out (SO-linked invoices move stock via fulfillment).
+      if (!inv.so_id) {
+        const invLines = await trx('invoice_lines').where({ invoice_id: inv.id });
+        for (const l of invLines) {
+          if (!l.item_id || !(Number(l.quantity) > 0)) continue;
+          try {
+            const baseQty = await InventoryEngine.toBaseQty(trx, l.uom_id || null, Number(l.quantity));
+            await InventoryEngine.createTransaction({
+              companyId, transactionType: 'inventory_adjustment',
+              referenceType: 'invoice', referenceId: inv.id,
+              transactionDate: inv.invoice_date,
+              locationId: l.location_id || inv.location_id || null,
+              memo: `Invoice ${inv.invoice_number} - stock out (approved)`,
+              lines: [{ itemId: l.item_id, quantity: baseQty, direction: 'out', locationId: l.location_id || inv.location_id || null }],
+              createdBy: req.user!.id, trx,
+            });
+          } catch (invErr: any) { console.error('[INV WARNING] Invoice approve stock-out skipped:', invErr.message); }
+        }
+      }
+      // 3) Stamp approval.
+      await trx('invoices').where({ id: inv.id }).update({ approval_status: 'approved', approved_by: approver, approved_at: new Date() });
+    });
+    const updated = await db('invoices').where({ id: inv.id }).first();
+    res.json({ success: true, data: updated, message: 'Invoice approved' });
+  } catch (e: any) { console.error("[ERP ERROR]", e.message, e.stack); res.status(500).json({ success: false, error: 'Failed to approve invoice' }); }
+});
+
+// Reject Invoice — leaves the GL non-posting (out of reports); marks rejected.
+router.post('/invoices/:id/reject', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const inv = await db('invoices').where({ id: req.params.id, company_id: req.user!.companyId, is_deleted: false }).first();
+    if (!inv) { res.status(404).json({ success: false, error: 'Invoice not found' }); return; }
+    if (inv.approval_status !== 'pending_approval') {
+      res.status(400).json({ success: false, error: `Invoice is not pending approval` }); return;
+    }
+    const reason = req.body?.reason || 'Rejected by approver';
+    const [updated] = await db('invoices').where({ id: inv.id })
+      .update({ approval_status: 'rejected', memo: `${inv.memo || ''}\n[REJECTED] ${reason}`.trim() }).returning('*');
+    res.json({ success: true, data: updated, message: 'Invoice rejected' });
+  } catch (e: any) { console.error("[ERP ERROR]", e.message); res.status(500).json({ success: false, error: 'Failed to reject invoice' }); }
+});
+
 // Insert invoice lines + post the invoice GL (shared by direct create and edit).
 // GL Impact department/location are sourced from the line items (AR/tax use the header).
 async function writeInvoiceLinesAndGL(
   trx: any, companyId: string, inv: any, invNumber: string, customerName: string, d: any,
   totals: { taxTotal: number; discountTotal: number; total: number }, userId: string,
+  nonPosting: boolean = false,
 ): Promise<void> {
   const { taxTotal, discountTotal, total } = totals;
   const headerDept = d.departmentId || null;
@@ -1014,7 +1072,10 @@ async function writeInvoiceLinesAndGL(
   const jeNumber = await generateTransactionNumber(companyId, 'journal_entry', trx);
   const [je] = await trx('journal_entries').insert({
     company_id: companyId, journal_number: jeNumber, entry_date: inv.invoice_date,
-    source_type: 'invoice', source_id: inv.id, status: 'posted',
+    source_type: 'invoice', source_id: inv.id,
+    // Non-posting when the invoice is pending approval (shows in GL Impact, excluded from reports).
+    status: nonPosting ? 'non_posting' : 'posted',
+    posted_by: nonPosting ? null : userId, posted_at: nonPosting ? null : new Date(),
     department_id: headerDept, location_id: headerLoc,
     memo: `Invoice ${invNumber} - ${customerName}`, created_by: userId,
   }).returning('*');
@@ -1115,6 +1176,11 @@ router.post('/invoices', async (req: Request, res: Response): Promise<void> => {
       const subtotal = grossSubtotal;
       const total = grossSubtotal - discountTotal + taxTotal;
 
+      // Approval gating (Option A): if an approver is configured for 'invoices',
+      // the invoice is created pending_approval with a NON-POSTING GL entry and the
+      // stock-out is deferred until approval.
+      const appr = await creationApprovalState(companyId, 'invoices');
+
       const [inv] = await trx('invoices').insert({
         company_id: companyId,
         subsidiary_id: d.subsidiaryId || null,
@@ -1134,18 +1200,20 @@ router.post('/invoices', async (req: Request, res: Response): Promise<void> => {
         total_amount: total,
         amount_due: total,
         status: 'open',
+        approval_status: appr.approvalStatus,
         memo: d.memo || '',
         location_id: d.locationId || null,
         department_id: d.departmentId || null,
         created_by: req.user!.id,
       }).returning('*');
 
-      // Insert lines + post GL (dept/location sourced from line items)
-      await writeInvoiceLinesAndGL(trx, companyId, inv, invNumber, customer.name, d, { taxTotal, discountTotal, total }, req.user!.id);
+      // Insert lines + post GL (non-posting when pending approval).
+      await writeInvoiceLinesAndGL(trx, companyId, inv, invNumber, customer.name, d, { taxTotal, discountTotal, total }, req.user!.id, appr.nonPosting);
 
       // Standalone invoice (not from an SO): reduce On Hand + Available now, since there is
-      // no Sales Order commitment / Item Fulfillment to move the stock.
-      if (!inv.so_id) {
+      // no Sales Order commitment / Item Fulfillment to move the stock. Deferred to
+      // approval when the invoice is pending.
+      if (!inv.so_id && !appr.approvalRequired) {
         for (const l of (d.lines || [])) {
           if (!l.itemId || !(Number(l.quantity) > 0)) continue;
           try {
@@ -1432,6 +1500,7 @@ router.post('/deposits', async (req: Request, res: Response): Promise<void> => {
     if (!d.bankAccountId) { res.status(400).json({ success: false, error: 'Bank Account is required' }); return; }
 
     const depNumber = `CDEP-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
+    const cdAppr = await creationApprovalState(companyId, 'customer_deposits');
     const depInsert: any = {
       company_id: companyId,
       deposit_number: depNumber,
@@ -1443,7 +1512,8 @@ router.post('/deposits', async (req: Request, res: Response): Promise<void> => {
       reference: d.reference || null,
       sales_order_id: d.salesOrderId || null,
       memo: d.memo || null,
-      status: 'posted',
+      status: cdAppr.nonPosting ? 'pending_approval' : 'posted',
+      approval_status: cdAppr.approvalStatus,
       created_by: req.user!.id,
     };
     const [depHasDept, depHasLoc, depHasSub] = await Promise.all([
@@ -1455,11 +1525,9 @@ router.post('/deposits', async (req: Request, res: Response): Promise<void> => {
     if (depHasLoc)  depInsert.location_id = d.locationId || null;
     if (depHasSub)  depInsert.subsidiary_id = d.subsidiaryId || null;
 
-    // Deposit + its GL Journal Entry are committed atomically — a deposit is never
-    // recorded without a posted Journal Entry (Dr. Bank / Cr. 2700 Customer Deposit).
     const deposit = await db.transaction(async (trx) => {
       const [dep] = await trx('customer_deposits').insert(depInsert).returning('*');
-      await postCustomerDepositGL(trx, companyId, dep, req.user!.id);
+      await postCustomerDepositGL(trx, companyId, dep, req.user!.id, cdAppr.nonPosting);
       return dep;
     });
 
@@ -1470,7 +1538,7 @@ router.post('/deposits', async (req: Request, res: Response): Promise<void> => {
 // Post the Customer Deposit GL: Dr. Bank / Cr. Customer Deposit (2700).
 // Routed through AccountingEngine.createJournalEntry so it is ALWAYS a fully-posted
 // Journal Entry (period, posted_by/at, balance check, base amounts).
-async function postCustomerDepositGL(trx: any, companyId: string, deposit: any, userId: string): Promise<void> {
+async function postCustomerDepositGL(trx: any, companyId: string, deposit: any, userId: string, nonPosting: boolean = false): Promise<void> {
   const custDepAcct = await getCustomerDepositAccount(trx, companyId);
   const bankAcct = await trx('accounts').where({ id: deposit.bank_account_id }).first();
   if (!custDepAcct) throw new AppError('Customer Deposit account (2700) not configured.', 400);
@@ -1489,6 +1557,7 @@ async function postCustomerDepositGL(trx: any, companyId: string, deposit: any, 
     ],
     createdBy: userId,
     trx,
+    nonPosting,
   });
 }
 
@@ -1649,6 +1718,7 @@ router.post('/return-authorizations', async (req: Request, res: Response): Promi
 
     const raNumber = `RA-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
     const totalAmount = (d.lines || []).reduce((s: number, l: any) => s + Number(l.qty || 0) * Number(l.unitPrice || 0), 0);
+    const raAppr = await creationApprovalState(companyId, 'return_authorizations');
 
     const [ra] = await db('return_authorizations').insert({
       company_id: companyId,
@@ -1661,6 +1731,7 @@ router.post('/return-authorizations', async (req: Request, res: Response): Promi
       memo: d.memo || null,
       total_amount: totalAmount,
       status: 'open',
+      approval_status: raAppr.approvalStatus,
       created_by: req.user!.id,
     }).returning('*');
 
@@ -1719,6 +1790,7 @@ router.post('/credit-memos', async (req: Request, res: Response): Promise<void> 
     const subtotal = (d.lines || []).reduce((s: number, l: any) => s + Number(l.qty || 0) * Number(l.unitPrice || 0), 0);
     const taxAmount = subtotal * (Number(d.taxRate || 0) / 100);
     const totalAmount = subtotal + taxAmount;
+    const cmAppr = await creationApprovalState(companyId, 'credit_memos');
 
     const [cm] = await db('credit_memos').insert({
       company_id: companyId,
@@ -1731,6 +1803,7 @@ router.post('/credit-memos', async (req: Request, res: Response): Promise<void> 
       subtotal, tax_amount: taxAmount, total_amount: totalAmount,
       memo: d.memo || null,
       status: 'open',
+      approval_status: cmAppr.approvalStatus,
       created_by: req.user!.id,
     }).returning('*');
 
@@ -1885,3 +1958,34 @@ router.get('/deposits/:id/audit', async (req: any, res: any) => {
 });
 
 export default router;
+
+// ─── Approve / Reject for GL-only sales types ────────────────────────────────
+function salesApproveReject(table: string, sourceType: string, route: string, rtr: typeof router) {
+  rtr.post(`/${route}/:id/approve`, async (req: any, res: any) => {
+    try {
+      const row = await db(table).where({ id: req.params.id, company_id: req.user.companyId }).first();
+      if (!row) { res.status(404).json({ success: false, error: 'Record not found' }); return; }
+      if (row.approval_status !== 'pending_approval') { res.status(400).json({ success: false, error: 'Not pending approval' }); return; }
+      const approver = await resolveApprover(req.user.companyId, table, req.user.id);
+      await db.transaction(async (trx: any) => {
+        await AccountingEngine.postDeferredJournal(sourceType, row.id, req.user.id, trx);
+        await trx(table).where({ id: row.id }).update({ approval_status: 'approved', approved_by: approver, approved_at: new Date() });
+      });
+      const updated = await db(table).where({ id: row.id }).first();
+      res.json({ success: true, data: updated, message: 'Approved' });
+    } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: `Failed to approve: ${e.message}` }); }
+  });
+  rtr.post(`/${route}/:id/reject`, async (req: any, res: any) => {
+    try {
+      const row = await db(table).where({ id: req.params.id, company_id: req.user.companyId }).first();
+      if (!row || row.approval_status !== 'pending_approval') { res.status(400).json({ success: false, error: 'Not pending approval' }); return; }
+      const [updated] = await db(table).where({ id: row.id })
+        .update({ approval_status: 'rejected', memo: `${row.memo || ''}\n[REJECTED] ${req.body?.reason || 'Rejected'}`.trim() }).returning('*');
+      res.json({ success: true, data: updated, message: 'Rejected' });
+    } catch (e: any) { res.status(500).json({ success: false, error: `Failed to reject: ${e.message}` }); }
+  });
+}
+
+salesApproveReject('customer_deposits', 'customer_deposit', 'deposits', router);
+salesApproveReject('return_authorizations', 'return_authorization', 'return-authorizations', router);
+salesApproveReject('credit_memos', 'credit_memo', 'credit-memos', router);

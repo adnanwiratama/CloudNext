@@ -8,6 +8,7 @@ import TransactionFilesTab from '../../components/transaction/TransactionFilesTa
 import TransactionSysInfoTab from '../../components/transaction/TransactionSysInfoTab';
 import { usePrintDocument } from '../../hooks/usePrintDocument';
 import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
+import ApprovalBar from '../../components/transaction/ApprovalBar';
 
 export default function TransferDetail() {
   const { id } = useParams<{ id: string }>();
@@ -83,6 +84,14 @@ export default function TransferDetail() {
           <button onClick={() => navigate('/bank/transfers-list')} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Back</button>
           <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
           <DeleteTransactionButton type="bank_transfer" id={id!} listPath="/bank/transfers-list" label={data.transfer_number} />
+          <ApprovalBar
+            approvalStatus={data?.approval_status}
+            approvedByName={data?.approved_by_name}
+            approvedAt={data?.approved_at}
+            approveUrl={`/api/bank/transfers/${id}/approve`}
+            rejectUrl={`/api/bank/transfers/${id}/reject`}
+            queryKeys={['transfer', id]}
+          />
         </div>
       </div>
 
@@ -173,6 +182,7 @@ export default function TransferDetail() {
                   {data.journalEntry ? (
                     <button onClick={() => navigate(`/accounting/journals/${data.journalEntry.id}`)} className="font-mono text-blue-600 hover:underline text-sm font-medium">{data.journalEntry.journal_number}</button>
                   ) : <span className="text-sm text-slate-400 italic">Not posted</span>}
+                  {data.journalEntry?.status === 'non_posting' && <span className="ml-2 px-1.5 py-0.5 text-xs bg-amber-100 text-amber-700 rounded">Non-Posting</span>}
                 </div>
                 <div className="border border-slate-200 rounded overflow-x-auto">
                   <table className="w-full text-xs min-w-max">

@@ -8,6 +8,7 @@ import TransactionFilesTab from '../../components/transaction/TransactionFilesTa
 import TransactionSysInfoTab from '../../components/transaction/TransactionSysInfoTab';
 import { usePrintDocument } from '../../hooks/usePrintDocument';
 import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
+import ApprovalBar from '../../components/transaction/ApprovalBar';
 
 export default function VendorPrepaymentDetail() {
   const { id } = useParams<{ id: string }>();
@@ -77,6 +78,14 @@ export default function VendorPrepaymentDetail() {
           <button onClick={() => navigate('/purchasing/prepayments')} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Back</button>
           <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
           <DeleteTransactionButton type="vendor_prepayment" id={id!} listPath="/purchasing/prepayments" label={prep.prepayment_number} />
+          <ApprovalBar
+            approvalStatus={prep?.approval_status}
+            approvedByName={prep?.approved_by_name}
+            approvedAt={prep?.approved_at}
+            approveUrl={`/api/purchasing/prepayments/${id}/approve`}
+            rejectUrl={`/api/purchasing/prepayments/${id}/reject`}
+            queryKeys={['vendor-prepayment', id]}
+          />
         </div>
       </div>
 

@@ -11,6 +11,7 @@ import TransactionSysInfoTab from '../../components/transaction/TransactionSysIn
 import { usePrintDocument } from '../../hooks/usePrintDocument';
 import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
 import EditTransactionButton from '../../components/transaction/EditTransactionButton';
+import ApprovalBar from '../../components/transaction/ApprovalBar';
 
 export default function InvoiceDetail() {
   const { id } = useParams<{ id: string }>();
@@ -102,6 +103,14 @@ export default function InvoiceDetail() {
             </button>
           )}
           <DeleteTransactionButton type="invoice" id={id!} listPath="/sales/invoices" label={inv.invoice_number} />
+          <ApprovalBar
+            approvalStatus={inv?.approval_status}
+            approvedByName={inv?.approved_by_name}
+            approvedAt={inv?.approved_at}
+            approveUrl={`/api/sales/invoices/${id}/approve`}
+            rejectUrl={`/api/sales/invoices/${id}/reject`}
+            queryKeys={['invoice', id]}
+          />
         </div>
       </div>
 
@@ -275,7 +284,7 @@ export default function InvoiceDetail() {
                       <tbody>
                         {(inv.journalEntries||[]).flatMap((je:any)=>(je.lines||[]).map((l:any,i:number)=>(
                           <tr key={`${je.id}-${i}`} className="border-t border-slate-100">
-                            <td className="px-3 py-1.5"><button onClick={()=>navigate(`/accounting/journals/${je.id}`)} className="text-blue-600 hover:underline font-mono text-xs">{je.journal_number}</button></td>
+                            <td className="px-3 py-1.5"><button onClick={()=>navigate(`/accounting/journals/${je.id}`)} className="text-blue-600 hover:underline font-mono text-xs">{je.journal_number}</button>{je.status === 'non_posting' && <span className="ml-2 px-1.5 py-0.5 text-xs bg-amber-100 text-amber-700 rounded">Non-Posting</span>}</td>
                             <td className="px-3 py-1.5 font-mono">{l.account_code}</td>
                             <td className="px-3 py-1.5 text-slate-700">{l.account_name}</td>
                             <td className="px-3 py-1.5 text-right text-blue-700 font-medium">{parseFloat(l.debit)>0?Number(l.debit).toLocaleString('id-ID',{minimumFractionDigits:2}):''}</td>

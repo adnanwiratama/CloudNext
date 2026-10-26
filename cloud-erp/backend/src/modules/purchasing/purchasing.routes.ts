@@ -9,7 +9,7 @@ import { attachAuditRoute, logTransaction, fetchJEWithLines } from '../../utils/
 import { AccountingEngine } from '../../engines/accounting/accountingEngine';
 import { InventoryEngine } from '../../engines/inventory/inventoryEngine';
 import { AppError } from '../../middleware/errorHandler';
-import { resolveApprover } from '../../utils/approvals';
+import { resolveApprover, creationApprovalState } from '../../utils/approvals';
 
 const router = Router();
 router.use(authenticate);
@@ -1017,6 +1017,7 @@ router.get('/bills/:id', async (req: Request, res: Response): Promise<void> => {
     ];
     if (billHasDept) { billQuery.leftJoin('departments as dep', 'b.department_id', 'dep.id'); billSelect.push('dep.name as department_name'); }
     if (billHasSub)  { billQuery.leftJoin('subsidiaries as sub', 'b.subsidiary_id', 'sub.id'); billSelect.push('sub.name as subsidiary_name'); }
+    billQuery.leftJoin('users as ab', 'b.approved_by', 'ab.id'); billSelect.push('ab.name as approved_by_name');
     const bill = await billQuery.select(billSelect).first();
 
     if (!bill) { res.status(404).json({ success: false, error: 'Vendor bill not found' }); return; }
@@ -1043,6 +1044,44 @@ router.get('/bills/:id', async (req: Request, res: Response): Promise<void> => {
     const journalEntries = await fetchJEWithLines('vendor_bill', bill.id, db);
     res.json({ success: true, data: { ...bill, lines, payments, journalEntries } });
   } catch (e: any) { console.error("[ERP ERROR]", e.message); res.status(500).json({ success: false, error: 'Failed to fetch vendor bill' }); }
+});
+
+// Approve Vendor Bill — posts the deferred GL (non-posting → posted) + stamps approver.
+router.post('/bills/:id/approve', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const companyId = req.user!.companyId;
+    const bill = await db('vendor_bills').where({ id: req.params.id, company_id: companyId, is_deleted: false }).first();
+    if (!bill) { res.status(404).json({ success: false, error: 'Vendor bill not found' }); return; }
+    if (bill.approval_status !== 'pending_approval') {
+      res.status(400).json({ success: false, error: `Bill is not pending approval (status: ${bill.approval_status || 'approved'})` }); return;
+    }
+    const approver = await resolveApprover(companyId, 'vendor_bills', req.user!.id);
+    await db.transaction(async (trx) => {
+      await AccountingEngine.postDeferredJournal('vendor_bill', bill.id, req.user!.id, trx);
+      // Mark bill as posted now that GL is posted.
+      await trx('vendor_bills').where({ id: bill.id }).update({
+        is_posted: true, posted_by: req.user!.id, posted_at: new Date(),
+        approval_status: 'approved', approved_by: approver, approved_at: new Date(),
+      });
+    });
+    const updated = await db('vendor_bills').where({ id: bill.id }).first();
+    res.json({ success: true, data: updated, message: 'Vendor bill approved' });
+  } catch (e: any) { console.error("[ERP ERROR]", e.message, e.stack); res.status(500).json({ success: false, error: 'Failed to approve vendor bill' }); }
+});
+
+// Reject Vendor Bill — leaves GL non-posting; marks rejected.
+router.post('/bills/:id/reject', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const bill = await db('vendor_bills').where({ id: req.params.id, company_id: req.user!.companyId, is_deleted: false }).first();
+    if (!bill) { res.status(404).json({ success: false, error: 'Vendor bill not found' }); return; }
+    if (bill.approval_status !== 'pending_approval') {
+      res.status(400).json({ success: false, error: 'Bill is not pending approval' }); return;
+    }
+    const reason = req.body?.reason || 'Rejected by approver';
+    const [updated] = await db('vendor_bills').where({ id: bill.id })
+      .update({ approval_status: 'rejected', memo: `${bill.memo || ''}\n[REJECTED] ${reason}`.trim() }).returning('*');
+    res.json({ success: true, data: updated, message: 'Vendor bill rejected' });
+  } catch (e: any) { console.error("[ERP ERROR]", e.message); res.status(500).json({ success: false, error: 'Failed to reject vendor bill' }); }
 });
 
 // Vendor Payments
@@ -1276,6 +1315,10 @@ router.post('/bills', async (req: Request, res: Response): Promise<void> => {
       return dt.toISOString().split('T')[0];
     })();
 
+    // Approval gating (Option A): pending_approval + non-posting GL when an approver
+    // is configured for 'vendor_bills'.
+    const billAppr = await creationApprovalState(companyId, 'vendor_bills');
+
     const [bill] = await db('vendor_bills').insert({
       company_id: companyId,
       bill_number: billNumber,
@@ -1293,6 +1336,7 @@ router.post('/bills', async (req: Request, res: Response): Promise<void> => {
       subsidiary_id: d.subsidiaryId || null, location_id: d.locationId || null, department_id: d.departmentId || null,
       memo: d.memo || null,
       status: 'open',
+      approval_status: billAppr.approvalStatus,
       created_by: req.user!.id,
     }).returning('*');
 
@@ -1342,8 +1386,9 @@ router.post('/bills', async (req: Request, res: Response): Promise<void> => {
     // ── GL posting ──────────────────────────────────────────────────────────
     try {
       if (bill.po_id) {
-        // Bill originated from a PO/receipt: clear the GR-IR accrual (Dr 2110 / Cr AP)
-        await AccountingEngine.postVendorBill(bill.id, req.user!.id, db);
+        // Bill originated from a PO/receipt: clear the GR-IR accrual (Dr 2110 / Cr AP).
+        // Deferred to non-posting when the bill is pending approval.
+        await AccountingEngine.postVendorBill(bill.id, req.user!.id, db, billAppr.nonPosting);
       } else {
         // Manual bill: Dr line expense/inventory accounts (+ tax input) / Cr AP
         const vendor = await db('vendors').where({ id: d.vendorId }).first();
@@ -1391,14 +1436,19 @@ router.post('/bills', async (req: Request, res: Response): Promise<void> => {
               journal_number: jeNumber, entry_date: d.billDate || new Date(),
               memo: `Vendor Bill ${billNumber}`, source_type: 'vendor_bill', source_id: bill.id,
               department_id: d.departmentId || null, location_id: d.locationId || null,
-              status: 'posted', total_debit: debitSum, total_credit: debitSum,
-              posted_by: req.user!.id, posted_at: new Date(), created_by: req.user!.id,
+              status: billAppr.nonPosting ? 'non_posting' : 'posted',
+              total_debit: debitSum, total_credit: debitSum,
+              posted_by: billAppr.nonPosting ? null : req.user!.id,
+              posted_at: billAppr.nonPosting ? null : new Date(),
+              created_by: req.user!.id,
             }).returning('*');
             // AP = debit total minus the discount credit already added
             const apCredit = debitSum - (discAcct && discountTotal > 0 ? discountTotal : 0);
             jeLines.push({ account_id: apAccountId, debit: 0, credit: apCredit, memo: `AP - ${vendor?.name || ''}` });
             await db('journal_entry_lines').insert(jeLines.map((jl: any, i: number) => ({ journal_id: je.id, line_number: i + 1, ...jl })));
-            await db('vendor_bills').where({ id: bill.id }).update({ is_posted: true, posted_by: req.user!.id, posted_at: new Date() });
+            if (!billAppr.nonPosting) {
+              await db('vendor_bills').where({ id: bill.id }).update({ is_posted: true, posted_by: req.user!.id, posted_at: new Date() });
+            }
           }
         }
       }
@@ -1669,6 +1719,7 @@ router.post('/prepayments', async (req: Request, res: Response): Promise<void> =
     if (!d.bankAccountId) { res.status(400).json({ success: false, error: 'Bank Account is required' }); return; }
 
     const prepNumber = `PREP-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
+    const prepAppr = await creationApprovalState(companyId, 'vendor_prepayments');
     const insertData: any = {
       company_id: companyId,
       prepayment_number: prepNumber,
@@ -1681,6 +1732,7 @@ router.post('/prepayments', async (req: Request, res: Response): Promise<void> =
       purchase_order_id: d.purchaseOrderId || null,
       memo: d.memo || null,
       status: 'unapplied',
+      approval_status: prepAppr.approvalStatus,
       created_by: req.user!.id,
     };
     // Persist classification when the columns exist (added by the dept/location migration).
@@ -1713,7 +1765,10 @@ router.post('/prepayments', async (req: Request, res: Response): Promise<void> =
           entry_date: d.paymentDate || new Date(),
           memo: `Vendor Prepayment ${prepNumber}`,
           source_type: 'vendor_prepayment', source_id: prep.id || prep,
-          status: 'posted', created_by: req.user!.id,
+          status: prepAppr.nonPosting ? 'non_posting' : 'posted',
+          posted_by: prepAppr.nonPosting ? null : req.user!.id,
+          posted_at: prepAppr.nonPosting ? null : new Date(),
+          created_by: req.user!.id,
         }).returning('id');
         const jeId = je?.id || je;
         await db('journal_entry_lines').insert([
@@ -1891,6 +1946,7 @@ router.post('/vendor-credits', async (req: Request, res: Response): Promise<void
     if (!d.vendorId) { res.status(400).json({ success: false, error: 'Vendor is required' }); return; }
 
     const vcNumber = `VC-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
+    const vcAppr = await creationApprovalState(companyId, 'vendor_credits');
     const totalAmount = (d.lines || []).reduce((s: number, l: any) => s + Number(l.qty || 0) * Number(l.unitPrice || 0), 0);
 
     const [vc] = await db('vendor_credits').insert({
@@ -1906,6 +1962,7 @@ router.post('/vendor-credits', async (req: Request, res: Response): Promise<void
       memo: d.memo || null,
       total_amount: totalAmount,
       status: 'open',
+      approval_status: vcAppr.approvalStatus,
       created_by: req.user!.id,
     }).returning('*');
 
@@ -1939,7 +1996,10 @@ router.post('/vendor-credits', async (req: Request, res: Response): Promise<void
             entry_date: d.creditDate || new Date(),
             memo: `Vendor Credit ${vcNumber}`,
             source_type: 'vendor_credit', source_id: vc.id || vc,
-            status: 'posted', created_by: req.user!.id,
+            status: vcAppr.nonPosting ? 'non_posting' : 'posted',
+            posted_by: vcAppr.nonPosting ? null : req.user!.id,
+            posted_at: vcAppr.nonPosting ? null : new Date(),
+            created_by: req.user!.id,
           }).returning('id');
           const jeId = je?.id || je;
           await db('journal_entry_lines').insert([
@@ -1993,3 +2053,33 @@ router.get('/payments/:id/audit',  auditSub('vendor_payment'));
 router.get('/prepayments/:id/audit', auditSub('vendor_prepayment'));
 
 export default router;
+
+// ─── Approve / Reject for remaining purchasing types ─────────────────────────
+function purchApproveReject(table: string, sourceType: string, route: string, rtr: typeof router) {
+  rtr.post(`/${route}/:id/approve`, async (req: any, res: any) => {
+    try {
+      const row = await db(table).where({ id: req.params.id, company_id: req.user.companyId }).first();
+      if (!row) { res.status(404).json({ success: false, error: 'Record not found' }); return; }
+      if (row.approval_status !== 'pending_approval') { res.status(400).json({ success: false, error: 'Not pending approval' }); return; }
+      const approver = await resolveApprover(req.user.companyId, table, req.user.id);
+      await db.transaction(async (trx: any) => {
+        await AccountingEngine.postDeferredJournal(sourceType, row.id, req.user.id, trx);
+        await trx(table).where({ id: row.id }).update({ approval_status: 'approved', approved_by: approver, approved_at: new Date() });
+      });
+      const updated = await db(table).where({ id: row.id }).first();
+      res.json({ success: true, data: updated, message: 'Approved' });
+    } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: `Failed to approve: ${e.message}` }); }
+  });
+  rtr.post(`/${route}/:id/reject`, async (req: any, res: any) => {
+    try {
+      const row = await db(table).where({ id: req.params.id, company_id: req.user.companyId }).first();
+      if (!row || row.approval_status !== 'pending_approval') { res.status(400).json({ success: false, error: 'Not pending approval' }); return; }
+      const [updated] = await db(table).where({ id: row.id })
+        .update({ approval_status: 'rejected', memo: `${row.memo || ''}\n[REJECTED] ${req.body?.reason || 'Rejected'}`.trim() }).returning('*');
+      res.json({ success: true, data: updated, message: 'Rejected' });
+    } catch (e: any) { res.status(500).json({ success: false, error: `Failed to reject: ${e.message}` }); }
+  });
+}
+
+purchApproveReject('vendor_prepayments', 'vendor_prepayment', 'prepayments', router);
+purchApproveReject('vendor_credits', 'vendor_credit', 'vendor-credits', router);

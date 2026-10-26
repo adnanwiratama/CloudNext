@@ -389,7 +389,7 @@ export class AccountingEngine {
    *
    * If Tax: Dr. also Tax Input (PPN masukan)
    */
-  static async postVendorBill(billId: string, userId: string, trx: any): Promise<void> {
+  static async postVendorBill(billId: string, userId: string, trx: any, nonPosting: boolean = false): Promise<void> {
     const bill = await trx('vendor_bills as b')
       .join('vendors as v', 'b.vendor_id', 'v.id')
       .select('b.*', 'v.name as vendor_name', 'v.ap_account_id as vendor_ap_account')
@@ -461,11 +461,15 @@ export class AccountingEngine {
       lines: jeLines,
       createdBy: userId,
       trx,
+      nonPosting,
     });
 
-    await trx('vendor_bills').where({ id: billId }).update({
-      is_posted: true, posted_by: userId, posted_at: new Date(),
-    });
+    // Only mark posted when not deferred (non-posting means we wait for approval).
+    if (!nonPosting) {
+      await trx('vendor_bills').where({ id: billId }).update({
+        is_posted: true, posted_by: userId, posted_at: new Date(),
+      });
+    }
   }
 
   /**

@@ -40,3 +40,4 @@ coverage/
 .cache/
 localhost_db_dump.sql
 dumperr.txt
+_backups/

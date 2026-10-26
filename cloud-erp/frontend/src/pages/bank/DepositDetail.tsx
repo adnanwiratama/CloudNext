@@ -9,6 +9,7 @@ import TransactionSysInfoTab from '../../components/transaction/TransactionSysIn
 import { usePrintDocument } from '../../hooks/usePrintDocument';
 import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
 import EditTransactionButton from '../../components/transaction/EditTransactionButton';
+import ApprovalBar from '../../components/transaction/ApprovalBar';
 
 export default function DepositDetail() {
   const { id } = useParams<{ id: string }>();
@@ -93,6 +94,14 @@ export default function DepositDetail() {
           <EditTransactionButton permKey="deposit" to={`/bank/deposits/${id}/edit`} />
           <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
           <DeleteTransactionButton type="bank_deposit" id={id!} listPath="/bank/deposits-list" label={data.deposit_number} />
+          <ApprovalBar
+            approvalStatus={data?.approval_status}
+            approvedByName={data?.approved_by_name}
+            approvedAt={data?.approved_at}
+            approveUrl={`/api/bank/deposits/${id}/approve`}
+            rejectUrl={`/api/bank/deposits/${id}/reject`}
+            queryKeys={['deposit', id]}
+          />
         </div>
       </div>
 
@@ -207,6 +216,7 @@ export default function DepositDetail() {
                   {data.journalEntry ? (
                     <button onClick={() => navigate(`/accounting/journals/${data.journalEntry.id}`)} className="font-mono text-blue-600 hover:underline text-sm font-medium">{data.journalEntry.journal_number}</button>
                   ) : <span className="text-sm text-slate-400 italic">Not posted</span>}
+                  {data.journalEntry?.status === 'non_posting' && <span className="ml-2 px-1.5 py-0.5 text-xs bg-amber-100 text-amber-700 rounded">Non-Posting</span>}
                 </div>
                 <div className="border border-slate-200 rounded overflow-x-auto">
                   <table className="w-full text-xs min-w-max">

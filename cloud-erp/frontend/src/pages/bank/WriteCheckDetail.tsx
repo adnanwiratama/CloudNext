@@ -5,6 +5,7 @@ import { useState, useEffect } from 'react';
 import api from '../../services/api';
 import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
 import EditTransactionButton from '../../components/transaction/EditTransactionButton';
+import ApprovalBar from '../../components/transaction/ApprovalBar';
 
 export default function WriteCheckDetail() {
   const { id }     = useParams<{ id: string }>();
@@ -162,6 +163,14 @@ export default function WriteCheckDetail() {
           <EditTransactionButton permKey="check" to={`/bank/checks/${id}/edit`} />
           <button onClick={handlePrint} className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-700 text-white text-sm font-medium rounded hover:bg-blue-800"><Printer size={13}/> Print</button>
           <DeleteTransactionButton type="bank_check" id={id!} listPath="/bank/checks-list" label={data.check_number} />
+          <ApprovalBar
+            approvalStatus={data?.approval_status}
+            approvedByName={data?.approved_by_name}
+            approvedAt={data?.approved_at}
+            approveUrl={`/api/bank/checks/${id}/approve`}
+            rejectUrl={`/api/bank/checks/${id}/reject`}
+            queryKeys={['check', id]}
+          />
         </div>
       </div>
 
@@ -468,6 +477,7 @@ export default function WriteCheckDetail() {
                       {data.journalEntry.status}
                     </span>
                   )}
+                  {data.journalEntry?.status === 'non_posting' && <span className="ml-2 px-1.5 py-0.5 text-xs bg-amber-100 text-amber-700 rounded">Non-Posting</span>}
                 </div>
 
                 <div className="border border-slate-200 rounded overflow-x-auto">

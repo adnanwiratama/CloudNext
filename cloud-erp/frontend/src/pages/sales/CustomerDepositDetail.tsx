@@ -9,6 +9,7 @@ import TransactionSysInfoTab from '../../components/transaction/TransactionSysIn
 import { usePrintDocument } from '../../hooks/usePrintDocument';
 import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
 import EditTransactionButton from '../../components/transaction/EditTransactionButton';
+import ApprovalBar from '../../components/transaction/ApprovalBar';
 
 export default function CustomerDepositDetail() {
   const { id } = useParams<{ id: string }>();
@@ -83,6 +84,14 @@ export default function CustomerDepositDetail() {
           )}
           <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
           <DeleteTransactionButton type="customer_deposit" id={id!} listPath="/sales/deposits" label={dep.deposit_number} />
+          <ApprovalBar
+            approvalStatus={dep?.approval_status}
+            approvedByName={dep?.approved_by_name}
+            approvedAt={dep?.approved_at}
+            approveUrl={`/api/sales/deposits/${id}/approve`}
+            rejectUrl={`/api/sales/deposits/${id}/reject`}
+            queryKeys={['customer-deposit', id]}
+          />
         </div>
       </div>
 

@@ -3,6 +3,9 @@ import db from '../../config/database';
 import { authenticate } from '../../middleware/auth';
 import { enforcePermissions } from '../../middleware/permissions';
 import { resolveTransactionNumber } from '../../utils/sequence';
+import { AccountingEngine } from '../../engines/accounting/accountingEngine';
+import { resolveApprover, creationApprovalState } from '../../utils/approvals';
+import { fetchJEWithLines } from '../../utils/transactionAudit';
 
 const router = Router();
 router.use(authenticate);
@@ -118,6 +121,7 @@ router.post('/write-checks', async (req: Request, res: Response): Promise<void> 
     // (transaction_sequences 'bank_check'). If override is allowed and a manual
     // document number is supplied, it is used; otherwise it is auto-generated.
     const docNumber = await resolveTransactionNumber(companyId, 'bank_check', d.documentNumber);
+    const chkAppr = await creationApprovalState(companyId, 'bank_checks');
 
     // check_number field = user-supplied manual check # (for the physical bank check #)
     const [check] = await db('bank_checks').insert({
@@ -138,6 +142,7 @@ router.post('/write-checks', async (req: Request, res: Response): Promise<void> 
       subsidiary_id: d.subsidiaryId || null,
       posting_period_id: d.postingPeriodId || null,
       status: 'issued',
+      approval_status: chkAppr.approvalStatus,
       created_by: req.user!.id,
     }).returning('*');
 
@@ -199,7 +204,7 @@ router.post('/write-checks', async (req: Request, res: Response): Promise<void> 
         memo: `Write Check - ${d.payTo} - ${docNumber}`,
         source_type: 'bank_check',
         source_id: check.id,
-        status: 'posted',
+        status: chkAppr.nonPosting ? 'non_posting' : 'posted',
         created_by: req.user!.id,
       }).returning('id');
       const jeId = je?.id || je;
@@ -486,6 +491,7 @@ router.post('/deposits', async (req: Request, res: Response): Promise<void> => {
     const depositNumber = await resolveTransactionNumber(companyId, 'bank_deposit', d.documentNumber);
     const lines = d.lines || [];
     const totalAmount = lines.reduce((s: number, l: any) => s + Number(l.amount || 0), 0);
+    const depAppr = await creationApprovalState(companyId, 'bank_deposits');
 
     const result = await db.transaction(async (trx) => {
       const [deposit] = await trx('bank_deposits').insert({
@@ -499,7 +505,8 @@ router.post('/deposits', async (req: Request, res: Response): Promise<void> => {
         department_id: d.departmentId || null,
         location_id: d.locationId || null,
         subsidiary_id: d.subsidiaryId || null,
-        status: 'posted',
+        status: depAppr.nonPosting ? 'pending_approval' : 'posted',
+        approval_status: depAppr.approvalStatus,
         created_by: req.user!.id,
       }).returning('*');
 
@@ -532,7 +539,7 @@ router.post('/deposits', async (req: Request, res: Response): Promise<void> => {
           source_id: deposit.id,
           department_id: d.departmentId || null,
           location_id: d.locationId || null,
-          status: 'posted',
+          status: depAppr.nonPosting ? 'non_posting' : 'posted',
           total_debit: totalAmount,
           total_credit: totalAmount,
           posted_by: req.user!.id,
@@ -676,6 +683,7 @@ router.post('/transfers', async (req: Request, res: Response): Promise<void> => 
     if (!d.amount || Number(d.amount) <= 0) { res.status(400).json({ success: false, error: 'Amount must be greater than 0' }); return; }
 
     const transferNumber = await resolveTransactionNumber(companyId, 'bank_transfer', d.documentNumber);
+    const tfrAppr = await creationApprovalState(companyId, 'bank_transfers');
 
     const [transfer] = await db('bank_transfers').insert({
       company_id: companyId,
@@ -686,7 +694,8 @@ router.post('/transfers', async (req: Request, res: Response): Promise<void> => 
       amount: Number(d.amount),
       reference: d.reference || null,
       memo: d.memo || null,
-      status: 'posted',
+      status: tfrAppr.nonPosting ? 'pending_approval' : 'posted',
+      approval_status: tfrAppr.approvalStatus,
       created_by: req.user!.id,
     }).returning('*');
 
@@ -703,11 +712,11 @@ router.post('/transfers', async (req: Request, res: Response): Promise<void> => 
         source_id: transfer.id,
         department_id: d.departmentId || null,
         location_id: d.locationId || null,
-        status: 'posted',
+        status: tfrAppr.nonPosting ? 'non_posting' : 'posted',
         total_debit: Number(d.amount),
         total_credit: Number(d.amount),
-        posted_by: req.user!.id,
-        posted_at: new Date(),
+        posted_by: tfrAppr.nonPosting ? null : req.user!.id,
+        posted_at: tfrAppr.nonPosting ? null : new Date(),
         created_by: req.user!.id,
       }).returning('*');
 
@@ -783,6 +792,43 @@ router.get('/transfers/:id', async (req: Request, res: Response): Promise<void> 
 });
 
 export default router;
+
+// ─── Approve / Reject helpers for bank transactions (GL-only, no inventory) ──
+
+function bankApproveReject(table: string, sourceType: string, router: any) {
+  router.post(`/${table === 'bank_checks' ? 'checks' : table === 'bank_deposits' ? 'deposits' : 'transfers'}/:id/approve`,
+    async (req: any, res: any): Promise<void> => {
+      try {
+        const row = await db(table).where({ id: req.params.id, company_id: req.user.companyId }).first();
+        if (!row) { res.status(404).json({ success: false, error: 'Record not found' }); return; }
+        if (row.approval_status !== 'pending_approval') { res.status(400).json({ success: false, error: `Not pending approval (status: ${row.approval_status || 'approved'})` }); return; }
+        const approver = await resolveApprover(req.user.companyId, table, req.user.id);
+        await db.transaction(async (trx: any) => {
+          await AccountingEngine.postDeferredJournal(sourceType, row.id, req.user.id, trx);
+          await trx(table).where({ id: row.id }).update({ approval_status: 'approved', approved_by: approver, approved_at: new Date(), status: 'posted' });
+        });
+        const updated = await db(table).where({ id: row.id }).first();
+        res.json({ success: true, data: updated, message: 'Approved' });
+      } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: `Failed to approve: ${e.message}` }); }
+    });
+
+  router.post(`/${table === 'bank_checks' ? 'checks' : table === 'bank_deposits' ? 'deposits' : 'transfers'}/:id/reject`,
+    async (req: any, res: any): Promise<void> => {
+      try {
+        const row = await db(table).where({ id: req.params.id, company_id: req.user.companyId }).first();
+        if (!row) { res.status(404).json({ success: false, error: 'Record not found' }); return; }
+        if (row.approval_status !== 'pending_approval') { res.status(400).json({ success: false, error: 'Not pending approval' }); return; }
+        const reason = req.body?.reason || 'Rejected by approver';
+        const [updated] = await db(table).where({ id: row.id })
+          .update({ approval_status: 'rejected', memo: `${row.memo || ''}\n[REJECTED] ${reason}`.trim(), status: 'rejected' }).returning('*');
+        res.json({ success: true, data: updated, message: 'Rejected' });
+      } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: `Failed to reject: ${e.message}` }); }
+    });
+}
+
+bankApproveReject('bank_checks', 'bank_check', router);
+bankApproveReject('bank_deposits', 'bank_deposit', router);
+bankApproveReject('bank_transfers', 'bank_transfer', router);
 
 // ── Audit routes ──────────────────────────────────────────────────────────────
 router.get('/deposits/:id/audit', async (req: any, res: any) => {

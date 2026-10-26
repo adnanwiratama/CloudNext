@@ -9,6 +9,7 @@ import { usePrintDocument } from '../../hooks/usePrintDocument';
 import TransactionFilesTab from '../../components/transaction/TransactionFilesTab';
 import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
 import EditTransactionButton from '../../components/transaction/EditTransactionButton';
+import ApprovalBar from '../../components/transaction/ApprovalBar';
 
 export default function InventoryAdjustmentDetail() {
   const { id } = useParams<{ id: string }>();
@@ -85,6 +86,14 @@ export default function InventoryAdjustmentDetail() {
           <EditTransactionButton permKey="inventory_adjustment" to={`/inventory/adjustments/${id}/edit`} />
           <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
           <DeleteTransactionButton type="inventory_adjustment" id={id!} listPath="/inventory/adjustments" label={adj.adjustment_number} />
+          <ApprovalBar
+            approvalStatus={adj?.approval_status}
+            approvedByName={adj?.approved_by_name}
+            approvedAt={adj?.approved_at}
+            approveUrl={`/api/inventory/adjustments/${id}/approve`}
+            rejectUrl={`/api/inventory/adjustments/${id}/reject`}
+            queryKeys={['inventory-adjustment', id]}
+          />
         </div>
       </div>
 

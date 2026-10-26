@@ -3,6 +3,8 @@ import db from '../../config/database';
 import { authenticate } from '../../middleware/auth';
 import { enforcePermissions } from '../../middleware/permissions';
 import { InventoryEngine } from '../../engines/inventory/inventoryEngine';
+import { AccountingEngine } from '../../engines/accounting/accountingEngine';
+import { resolveApprover, creationApprovalState } from '../../utils/approvals';
 
 const router = Router();
 router.use(authenticate);
@@ -31,6 +33,7 @@ async function resolveItemInventoryAccount(companyId: string, itemId: string): P
 async function postAdjustmentGL(
   companyId: string, adjId: string, adjNumber: string, entryDate: any,
   lines: any[], accountId: string | null | undefined, userId: string,
+  nonPosting: boolean = false,
 ): Promise<void> {
   let adjustAcct = accountId ? await db('accounts').where({ id: accountId }).first() : null;
   if (!adjustAcct) adjustAcct = await db('accounts').where({ company_id: companyId, code: '5200' }).first();
@@ -57,7 +60,9 @@ async function postAdjustmentGL(
   const [je] = await db('journal_entries').insert({
     company_id: companyId, journal_number: jeNum, entry_date: entryDate,
     memo: `Inventory Adjustment ${adjNumber}`, source_type: 'inventory_adjustment', source_id: adjId,
-    status: 'posted', created_by: userId,
+    status: nonPosting ? 'non_posting' : 'posted',
+    posted_by: nonPosting ? null : userId, posted_at: nonPosting ? null : new Date(),
+    created_by: userId,
   }).returning('id');
   const jeId = je?.id || je;
   await db('journal_entry_lines').insert(glLines.map((l, i) => ({ journal_id: jeId, line_number: i + 1, ...l })));
@@ -82,6 +87,7 @@ router.post('/adjustments', async (req: Request, res: Response): Promise<void> =
     if (!d.lines || d.lines.length === 0) { res.status(400).json({ success: false, error: 'At least one adjustment line required' }); return; }
 
     const adjNumber = `ADJ-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
+    const adjAppr = await creationApprovalState(companyId, 'inventory_adjustments');
 
     const [adj] = await db('inventory_adjustments').insert({
       company_id: companyId,
@@ -91,11 +97,13 @@ router.post('/adjustments', async (req: Request, res: Response): Promise<void> =
       reason: d.reason || null,
       account_id: uid(d.accountId),
       memo: d.memo || null,
-      status: 'posted',
+      status: adjAppr.nonPosting ? 'pending_approval' : 'posted',
+      approval_status: adjAppr.approvalStatus,
       created_by: req.user!.id,
     }).returning('*');
 
-    // Insert lines and update inventory balances (balances are kept in the item's BASE unit)
+    // Insert lines and update inventory balances (balances are kept in the item's BASE unit).
+    // Inventory movements are deferred to approval when pending.
     for (const line of d.lines) {
       await db('inventory_adjustment_lines').insert({
         adjustment_id: adj.id,
@@ -107,35 +115,37 @@ router.post('/adjustments', async (req: Request, res: Response): Promise<void> =
         reason: line.reason || null,
       });
 
-      // Convert the entered qty (in the line's unit) to the item's base stock unit
-      const rate = await InventoryEngine.baseRate(db, line.uomId || null);
-      const baseAdjQty = Number(line.adjustQty) * rate;
+      if (!adjAppr.approvalRequired) {
+        // Convert the entered qty (in the line's unit) to the item's base stock unit
+        const rate = await InventoryEngine.baseRate(db, line.uomId || null);
+        const baseAdjQty = Number(line.adjustQty) * rate;
 
-      // Update inventory balance
-      const existing = await db('inventory_balances')
-        .where({ company_id: companyId, item_id: line.itemId, location_id: line.locationId })
-        .first();
+        // Update inventory balance
+        const existing = await db('inventory_balances')
+          .where({ company_id: companyId, item_id: line.itemId, location_id: line.locationId })
+          .first();
 
-      if (existing) {
-        await db('inventory_balances')
-          .where({ id: existing.id })
-          .update({ qty_on_hand: db.raw('qty_on_hand + ?', [baseAdjQty]) });
-      } else {
-        await db('inventory_balances').insert({
-          company_id: companyId,
-          item_id: line.itemId,
-          location_id: uid(line.locationId),
-          lot_number: '', serial_number: '',
-          qty_on_hand: Math.max(0, baseAdjQty),
-          qty_committed: 0,
-          avg_cost: Number(line.unitCost || 0),
-        });
+        if (existing) {
+          await db('inventory_balances')
+            .where({ id: existing.id })
+            .update({ qty_on_hand: db.raw('qty_on_hand + ?', [baseAdjQty]) });
+        } else {
+          await db('inventory_balances').insert({
+            company_id: companyId,
+            item_id: line.itemId,
+            location_id: uid(line.locationId),
+            lot_number: '', serial_number: '',
+            qty_on_hand: Math.max(0, baseAdjQty),
+            qty_committed: 0,
+            avg_cost: Number(line.unitCost || 0),
+          });
+        }
       }
     }
 
-    // ── GL: per-line. Inventory side uses each item's Inventory/Asset Account ──
+    // ── GL: per-line. Deferred to non-posting when pending approval ──
     try {
-      await postAdjustmentGL(companyId, adj.id || adj, adjNumber, d.adjustmentDate || new Date(), d.lines, d.accountId, req.user!.id);
+      await postAdjustmentGL(companyId, adj.id || adj, adjNumber, d.adjustmentDate || new Date(), d.lines, d.accountId, req.user!.id, adjAppr.nonPosting);
     } catch (glErr: any) { console.error('[GL ERROR] Inventory Adjustment GL:', glErr.message); }
 
     res.status(201).json({ success: true, data: { ...adj, adjustment_number: adjNumber } });
@@ -162,6 +172,7 @@ router.post('/transfers', async (req: Request, res: Response): Promise<void> => 
     if (!d.fromLocationId || !d.toLocationId) { res.status(400).json({ success: false, error: 'Both locations are required' }); return; }
 
     const tfrNumber = `TFR-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
+    const tfrAppr = await creationApprovalState(companyId, 'inventory_transfers');
 
     const [transfer] = await db('inventory_transfers').insert({
       company_id: companyId,
@@ -171,11 +182,12 @@ router.post('/transfers', async (req: Request, res: Response): Promise<void> => 
       to_location_id: d.toLocationId,
       reference: d.reference || null,
       memo: d.memo || null,
-      status: 'posted',
+      status: tfrAppr.nonPosting ? 'pending_approval' : 'posted',
+      approval_status: tfrAppr.approvalStatus,
       created_by: req.user!.id,
     }).returning('*');
 
-    // Insert lines and update balances (in the item's BASE unit)
+    // Insert lines; inventory balances updated only when not pending approval.
     for (const line of d.lines || []) {
       await db('inventory_transfer_lines').insert({
         transfer_id: transfer.id,
@@ -185,34 +197,36 @@ router.post('/transfers', async (req: Request, res: Response): Promise<void> => 
         unit_cost: Number(line.unitCost || 0),
       });
 
-      // Convert transfer qty to base stock unit
-      const rate = await InventoryEngine.baseRate(db, line.uomId || null);
-      const baseQty = Number(line.qty) * rate;
+      if (!tfrAppr.approvalRequired) {
+        // Convert transfer qty to base stock unit
+        const rate = await InventoryEngine.baseRate(db, line.uomId || null);
+        const baseQty = Number(line.qty) * rate;
 
-      // Deduct from source
-      await db('inventory_balances')
-        .where({ company_id: companyId, item_id: line.itemId, location_id: d.fromLocationId })
-        .update({ qty_on_hand: db.raw('GREATEST(0, qty_on_hand - ?)', [baseQty]) });
-
-      // Add to destination
-      const destBalance = await db('inventory_balances')
-        .where({ company_id: companyId, item_id: line.itemId, location_id: d.toLocationId }).first();
-      if (destBalance) {
+        // Deduct from source
         await db('inventory_balances')
-          .where({ id: destBalance.id })
-          .update({ qty_on_hand: db.raw('qty_on_hand + ?', [baseQty]) });
-      } else {
-        await db('inventory_balances').insert({
-          company_id: companyId, item_id: line.itemId, location_id: d.toLocationId,
-          lot_number: '', serial_number: '',
-          qty_on_hand: baseQty, qty_committed: 0, avg_cost: Number(line.unitCost || 0),
-        });
+          .where({ company_id: companyId, item_id: line.itemId, location_id: d.fromLocationId })
+          .update({ qty_on_hand: db.raw('GREATEST(0, qty_on_hand - ?)', [baseQty]) });
+
+        // Add to destination
+        const destBalance = await db('inventory_balances')
+          .where({ company_id: companyId, item_id: line.itemId, location_id: d.toLocationId }).first();
+        if (destBalance) {
+          await db('inventory_balances')
+            .where({ id: destBalance.id })
+            .update({ qty_on_hand: db.raw('qty_on_hand + ?', [baseQty]) });
+        } else {
+          await db('inventory_balances').insert({
+            company_id: companyId, item_id: line.itemId, location_id: d.toLocationId,
+            lot_number: '', serial_number: '',
+            qty_on_hand: baseQty, qty_committed: 0, avg_cost: Number(line.unitCost || 0),
+          });
+        }
       }
     }
 
     // ── GL: Dr. Inventory (To Location) / Cr. Inventory (From Location) ───────
     try {
-      const invAcct = await db('accounts').where({ company_id: companyId, code: '1200' }).first(); // Inventory
+      const invAcct = await db('accounts').where({ company_id: companyId, code: '1200' }).first();
       if (invAcct) {
         const totalValue = (d.lines || []).reduce((sum: number, line: any) => 
           sum + (Number(line.qty) * Number(line.unitCost || 0)), 0);
@@ -224,7 +238,10 @@ router.post('/transfers', async (req: Request, res: Response): Promise<void> => 
             entry_date: d.transferDate || new Date(),
             memo: `Inventory Transfer ${tfrNumber}`,
             source_type: 'inventory_transfer', source_id: transfer.id || transfer,
-            status: 'posted', created_by: req.user!.id,
+            status: tfrAppr.nonPosting ? 'non_posting' : 'posted',
+            posted_by: tfrAppr.nonPosting ? null : req.user!.id,
+            posted_at: tfrAppr.nonPosting ? null : new Date(),
+            created_by: req.user!.id,
           }).returning('id');
           const jeId = je?.id || je;
           await db('journal_entry_lines').insert([
@@ -586,3 +603,91 @@ router.put('/transfer-orders/:id', async (req: Request, res: Response): Promise<
 });
 
 export default router;
+
+// ─── Approve / Reject inventory transactions ──────────────────────────────────
+// Inventory Adjustment: approve flips GL non_posting→posted + runs deferred
+// inventory balance movements.
+router.post('/adjustments/:id/approve', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const companyId = req.user!.companyId;
+    const adj = await db('inventory_adjustments').where({ id: req.params.id, company_id: companyId }).first();
+    if (!adj) { res.status(404).json({ success: false, error: 'Adjustment not found' }); return; }
+    if (adj.approval_status !== 'pending_approval') { res.status(400).json({ success: false, error: 'Not pending approval' }); return; }
+    const approver = await resolveApprover(companyId, 'inventory_adjustments', req.user!.id);
+    await db.transaction(async (trx) => {
+      // 1) Post the deferred GL.
+      await AccountingEngine.postDeferredJournal('inventory_adjustment', adj.id, req.user!.id, trx);
+      // 2) Run the deferred inventory balance movements.
+      const lines = await trx('inventory_adjustment_lines').where({ adjustment_id: adj.id });
+      for (const line of lines) {
+        const rate = await InventoryEngine.baseRate(trx, line.uom_id || null);
+        const baseAdjQty = Number(line.adjust_qty) * rate;
+        const existing = await trx('inventory_balances')
+          .where({ company_id: companyId, item_id: line.item_id, location_id: line.location_id }).first();
+        if (existing) {
+          await trx('inventory_balances').where({ id: existing.id })
+            .update({ qty_on_hand: trx.raw('qty_on_hand + ?', [baseAdjQty]) });
+        } else {
+          await trx('inventory_balances').insert({
+            company_id: companyId, item_id: line.item_id, location_id: line.location_id,
+            lot_number: '', serial_number: '', qty_on_hand: Math.max(0, baseAdjQty),
+            qty_committed: 0, avg_cost: Number(line.unit_cost || 0),
+          });
+        }
+      }
+      // 3) Stamp approval.
+      await trx('inventory_adjustments').where({ id: adj.id }).update({
+        status: 'posted', approval_status: 'approved', approved_by: approver, approved_at: new Date(),
+      });
+    });
+    const updated = await db('inventory_adjustments').where({ id: adj.id }).first();
+    res.json({ success: true, data: updated, message: 'Adjustment approved' });
+  } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: 'Failed to approve adjustment' }); }
+});
+
+router.post('/adjustments/:id/reject', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const adj = await db('inventory_adjustments').where({ id: req.params.id, company_id: req.user!.companyId }).first();
+    if (!adj || adj.approval_status !== 'pending_approval') { res.status(400).json({ success: false, error: 'Not pending approval' }); return; }
+    const [updated] = await db('inventory_adjustments').where({ id: adj.id })
+      .update({ approval_status: 'rejected', memo: `${adj.memo || ''}\n[REJECTED] ${req.body?.reason || 'Rejected'}`.trim() }).returning('*');
+    res.json({ success: true, data: updated, message: 'Adjustment rejected' });
+  } catch (e: any) { res.status(500).json({ success: false, error: 'Failed to reject' }); }
+});
+
+// Inventory Transfer approve: flip GL + run balance movements.
+router.post('/transfers/:id/approve', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const companyId = req.user!.companyId;
+    const tfr = await db('inventory_transfers').where({ id: req.params.id, company_id: companyId }).first();
+    if (!tfr) { res.status(404).json({ success: false, error: 'Transfer not found' }); return; }
+    if (tfr.approval_status !== 'pending_approval') { res.status(400).json({ success: false, error: 'Not pending approval' }); return; }
+    const approver = await resolveApprover(companyId, 'inventory_transfers', req.user!.id);
+    await db.transaction(async (trx) => {
+      await AccountingEngine.postDeferredJournal('inventory_transfer', tfr.id, req.user!.id, trx);
+      const lines = await trx('inventory_transfer_lines').where({ transfer_id: tfr.id });
+      for (const line of lines) {
+        const rate = await InventoryEngine.baseRate(trx, line.uom_id || null);
+        const baseQty = Number(line.qty) * rate;
+        await trx('inventory_balances').where({ company_id: companyId, item_id: line.item_id, location_id: tfr.from_location_id })
+          .update({ qty_on_hand: trx.raw('GREATEST(0, qty_on_hand - ?)', [baseQty]) });
+        const dest = await trx('inventory_balances').where({ company_id: companyId, item_id: line.item_id, location_id: tfr.to_location_id }).first();
+        if (dest) { await trx('inventory_balances').where({ id: dest.id }).update({ qty_on_hand: trx.raw('qty_on_hand + ?', [baseQty]) }); }
+        else { await trx('inventory_balances').insert({ company_id: companyId, item_id: line.item_id, location_id: tfr.to_location_id, lot_number: '', serial_number: '', qty_on_hand: baseQty, qty_committed: 0, avg_cost: Number(line.unit_cost || 0) }); }
+      }
+      await trx('inventory_transfers').where({ id: tfr.id }).update({ status: 'posted', approval_status: 'approved', approved_by: approver, approved_at: new Date() });
+    });
+    const updated = await db('inventory_transfers').where({ id: tfr.id }).first();
+    res.json({ success: true, data: updated, message: 'Transfer approved' });
+  } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: 'Failed to approve transfer' }); }
+});
+
+router.post('/transfers/:id/reject', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const tfr = await db('inventory_transfers').where({ id: req.params.id, company_id: req.user!.companyId }).first();
+    if (!tfr || tfr.approval_status !== 'pending_approval') { res.status(400).json({ success: false, error: 'Not pending approval' }); return; }
+    const [updated] = await db('inventory_transfers').where({ id: tfr.id })
+      .update({ approval_status: 'rejected', memo: `${tfr.memo || ''}\n[REJECTED] ${req.body?.reason || 'Rejected'}`.trim() }).returning('*');
+    res.json({ success: true, data: updated, message: 'Transfer rejected' });
+  } catch (e: any) { res.status(500).json({ success: false, error: 'Failed to reject' }); }
+});
