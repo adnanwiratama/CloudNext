@@ -927,6 +927,21 @@ function bankApproveReject(table: string, sourceType: string, router: any) {
             await createBankCheckJE(row, req.user.id, trx);
           }
           await trx(table).where({ id: row.id }).update({ approval_status: 'approved', approved_by: approver, approved_at: new Date(), status: 'posted' });
+          
+          // Audit log
+          await trx('transaction_audit_log').insert({
+            company_id: req.user.companyId,
+            source_type: sourceType,
+            source_id: row.id,
+            action: 'approved',
+            context: 'UI',
+            change_type: 'StatusChange',
+            description: `${sourceType.replace('_', ' ')} approved`,
+            performed_by: req.user.id,
+            performed_by_name: req.user?.name || 'System',
+            ip_address: req.ip || null,
+            performed_at: new Date(),
+          }).catch(() => {});
         });
         const updated = await db(table).where({ id: row.id }).first();
         res.json({ success: true, data: updated, message: 'Approved' });
@@ -942,6 +957,22 @@ function bankApproveReject(table: string, sourceType: string, router: any) {
         const reason = req.body?.reason || 'Rejected by approver';
         const [updated] = await db(table).where({ id: row.id })
           .update({ approval_status: 'draft', memo: `${row.memo || ''}\n[REJECTED] ${reason}`.trim() }).returning('*');
+        
+        // Audit log
+        await db('transaction_audit_log').insert({
+          company_id: req.user.companyId,
+          source_type: sourceType,
+          source_id: row.id,
+          action: 'rejected',
+          context: 'UI',
+          change_type: 'StatusChange',
+          description: `${sourceType.replace('_', ' ')} rejected: ${reason}`,
+          performed_by: req.user.id,
+          performed_by_name: req.user?.name || 'System',
+          ip_address: req.ip || null,
+          performed_at: new Date(),
+        }).catch(() => {});
+        
         res.json({ success: true, data: updated, message: 'Rejected' });
       } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: `Failed to reject: ${e.message}` }); }
     });
@@ -961,18 +992,34 @@ router.get('/transfers/:id/audit', async (req: any, res: any) => {
 
 
 // ─── Submit for Approval (draft → pending_approval) ──────────────────────────
-function bankSubmit(table: string, route: string, rtr: any) {
+function bankSubmit(table: string, route: string, rtr: any, sourceType: string) {
   rtr.post(`/${route}/:id/submit`, async (req: any, res: any) => {
     try {
       const row = await db(table).where({ id: req.params.id, company_id: req.user.companyId }).first();
       if (!row) { res.status(404).json({ success: false, error: 'Record not found' }); return; }
       if (!['draft', 'rejected'].includes(row.approval_status || 'draft')) { res.status(400).json({ success: false, error: `Cannot submit — status is ${row.approval_status}` }); return; }
       const [updated] = await db(table).where({ id: row.id }).update({ approval_status: 'pending_approval' }).returning('*');
+      
+      // Audit log
+      await db('transaction_audit_log').insert({
+        company_id: req.user.companyId,
+        source_type: sourceType,
+        source_id: row.id,
+        action: 'submitted',
+        context: 'UI',
+        change_type: 'StatusChange',
+        description: `${sourceType.replace('_', ' ')} submitted for approval`,
+        performed_by: req.user.id,
+        performed_by_name: req.user?.name || 'System',
+        ip_address: req.ip || null,
+        performed_at: new Date(),
+      }).catch(() => {});
+      
       res.json({ success: true, data: updated, message: 'Submitted for approval' });
     } catch (e: any) { res.status(500).json({ success: false, error: `Failed: ${e.message}` }); }
   });
 }
 
-bankSubmit('bank_checks', 'checks', router);
-bankSubmit('bank_deposits', 'deposits', router);
-bankSubmit('bank_transfers', 'transfers', router);
+bankSubmit('bank_checks', 'checks', router, 'bank_check');
+bankSubmit('bank_deposits', 'deposits', router, 'bank_deposit');
+bankSubmit('bank_transfers', 'transfers', router, 'bank_transfer');

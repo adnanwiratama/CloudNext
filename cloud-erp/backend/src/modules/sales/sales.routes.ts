@@ -2002,6 +2002,19 @@ function salesSubmit(table: string, route: string, rtr: typeof router) {
       if (!['draft', 'rejected'].includes(row.approval_status || 'draft')) { res.status(400).json({ success: false, error: `Cannot submit — status is ${row.approval_status}` }); return; }
       const [updated] = await db(table).where({ id: row.id })
         .update({ approval_status: 'pending_approval' }).returning('*');
+      
+      // Audit log
+      const entityType = table.replace(/_/g, '_');
+      const entityNumber = row.invoice_number || row.so_number || row.deposit_number || row.ra_number || row.cm_number || row.id;
+      await createAuditLog({ 
+        companyId: req.user.companyId, 
+        userId: req.user.id, 
+        action: 'submit', 
+        entityType, 
+        entityId: row.id, 
+        entityNumber 
+      });
+      
       res.json({ success: true, data: updated, message: 'Submitted for approval' });
     } catch (e: any) { res.status(500).json({ success: false, error: `Failed to submit: ${e.message}` }); }
   });
