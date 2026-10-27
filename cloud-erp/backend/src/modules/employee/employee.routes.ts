@@ -5,6 +5,7 @@ import { enforcePermissions } from '../../middleware/permissions';
 import { AccountingEngine } from '../../engines/accounting/accountingEngine';
 import { fetchJEWithLines } from '../../utils/transactionAudit';
 import { resolveApprover } from '../../utils/approvals';
+import { getConfiguredApproverInfo } from '../../utils/approvals';
 
 const router = Router();
 router.use(authenticate);
@@ -85,7 +86,8 @@ router.get('/expenses/:id', async (req: Request, res: Response): Promise<void> =
         .where({ 'epa.report_id': req.params.id })
         .select('epa.id', 'epa.applied_amount', 'ep.id as payment_id', 'ep.payment_number', 'ep.payment_date', 'ep.status as payment_status');
     }
-    res.json({ success: true, data: { ...report, lines, journalEntries, payments } });
+    const cfgExp = await getConfiguredApproverInfo(req.user!.companyId, 'expense_reports');
+    res.json({ success: true, data: { ...report, lines, journalEntries, payments, configured_approver_id: cfgExp?.id||null, configured_approver_name: cfgExp?.name||null } });
   } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: 'Failed to fetch report' }); }
 });
 
@@ -432,4 +434,18 @@ router.get('/expense-payments/:id/audit', async (req: any, res: any) => {
 });
 router.get('/expenses/:id/audit', async (req: any, res: any) => {
   try { const l = await (db as any)('transaction_audit_log').where({ company_id: req.user.companyId, source_type: 'expense_report', source_id: req.params.id }).orderBy('performed_at','desc').limit(200); res.json({ success:true, data:l }); } catch(e:any){ res.status(500).json({success:false,error:e.message}); }
+});
+
+
+// ─── Submit for Approval (draft → pending_approval) ──────────────────────────
+router.post('/expenses/:id/submit', async (req: any, res: any) => {
+  try {
+    const row = await db('expense_reports').where({ id: req.params.id, company_id: req.user.companyId }).first();
+    if (!row) { res.status(404).json({ success: false, error: 'Report not found' }); return; }
+    if (!['draft', 'rejected'].includes(row.approval_status || 'draft')) {
+      res.status(400).json({ success: false, error: `Cannot submit — status is ${row.approval_status}` }); return;
+    }
+    const [updated] = await db('expense_reports').where({ id: row.id }).update({ approval_status: 'pending_approval' }).returning('*');
+    res.json({ success: true, data: updated, message: 'Submitted for approval' });
+  } catch (e: any) { res.status(500).json({ success: false, error: `Failed: ${e.message}` }); }
 });

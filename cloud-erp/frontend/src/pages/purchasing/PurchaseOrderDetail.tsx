@@ -12,6 +12,7 @@ import TransactionSysInfoTab from '../../components/transaction/TransactionSysIn
 import { usePrintDocument } from '../../hooks/usePrintDocument';
 import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
 import EditTransactionButton from '../../components/transaction/EditTransactionButton';
+import ApprovalBar from '../../components/transaction/ApprovalBar';
 
 export default function PurchaseOrderDetail() {
   const { id } = useParams<{ id: string }>();
@@ -120,13 +121,23 @@ export default function PurchaseOrderDetail() {
           <button onClick={() => navigate('/purchasing/orders')} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Back</button>
           <EditTransactionButton permKey="purchase_order" to={`/purchasing/orders/${id}/edit`} />
           <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
-          {canApprove && <button onClick={() => approveMutation.mutate()} disabled={approveMutation.isPending} className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-sm rounded hover:bg-green-700 disabled:opacity-60"><CheckCircle size={13}/> Approve</button>}
-          {canApprove && <button onClick={() => { if (confirm('Reject?')) rejectMutation.mutate(); }} disabled={rejectMutation.isPending} className="px-3 py-1.5 bg-red-600 text-white text-sm rounded hover:bg-red-700 disabled:opacity-60">Reject</button>}
           {canReceive && <button onClick={() => navigate(`/purchasing/receipts/new?poId=${id}`)} className="flex items-center gap-1 px-3 py-1.5 bg-blue-700 text-white text-sm rounded hover:bg-blue-800"><Package size={13}/> Good Receipt</button>}
           {canBill && <button onClick={() => navigate(`/purchasing/bills/new?poId=${id}`)} className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700"><FileText size={13}/> Create Bill</button>}
           {canClose && <button onClick={() => { if (confirm('Close this PO? Item Receipt and Create Bill will no longer be available until it is reopened.')) closeMutation.mutate(); }} disabled={closeMutation.isPending} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50 disabled:opacity-60"><Lock size={13}/> Closed</button>}
           {isClosed && <button onClick={() => reopenMutation.mutate()} disabled={reopenMutation.isPending} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50 disabled:opacity-60"><Unlock size={13}/> Reopen</button>}
           <DeleteTransactionButton type="purchase_order" id={id!} listPath="/purchasing/orders" label={po.po_number} />
+          <ApprovalBar
+            recordType="purchase_orders"
+            approvalStatus={po?.approval_status}
+            approvedByName={po?.approved_by_name}
+            approvedAt={po?.approved_at}
+            configuredApproverId={po?.configured_approver_id}
+            configuredApproverName={po?.configured_approver_name}
+            submitUrl={`/api/purchasing/orders/${id}/submit`}
+            approveUrl={`/api/purchasing/orders/${id}/approve`}
+            rejectUrl={`/api/purchasing/orders/${id}/reject`}
+            queryKeys={['purchase-order', id]}
+          />
         </div>
       </div>
 

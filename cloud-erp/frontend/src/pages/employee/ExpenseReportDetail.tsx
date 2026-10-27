@@ -10,6 +10,7 @@ import { usePrintDocument } from '../../hooks/usePrintDocument';
 import toast from 'react-hot-toast';
 import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
 import EditTransactionButton from '../../components/transaction/EditTransactionButton';
+import ApprovalBar from '../../components/transaction/ApprovalBar';
 
 export default function ExpenseReportDetail() {
   const { id } = useParams<{ id: string }>();
@@ -94,12 +95,23 @@ export default function ExpenseReportDetail() {
           <button onClick={() => navigate('/employee/expenses')} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Back</button>
           {canEdit && <EditTransactionButton permKey="expense_report" to={`/employee/expenses/${id}/edit`} />}
           <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
-          {rep.status === 'submitted' && <button onClick={() => approveMutation.mutate()} disabled={approveMutation.isPending} className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-sm rounded hover:bg-green-700 disabled:opacity-60"><CheckCircle size={13}/> Approve</button>}
           {rep.status === 'approved' && (
             <button onClick={() => navigate(`/employee/expense-payments/new?accountId=${rep.account_id||''}&amount=${Number(rep.total_amount||0)}&reportId=${id}`)}
               className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white text-sm rounded hover:bg-emerald-700">💳 Create Payment</button>
           )}
           <DeleteTransactionButton type="expense_report" id={id!} listPath="/employee/expenses" label={rep.report_number} />
+          <ApprovalBar
+            recordType="expense_reports"
+            approvalStatus={rep?.approval_status}
+            approvedByName={rep?.approved_by_name}
+            approvedAt={rep?.approved_at}
+            configuredApproverId={rep?.configured_approver_id}
+            configuredApproverName={rep?.configured_approver_name}
+            submitUrl={`/api/employee/expenses/${id}/submit`}
+            approveUrl={`/api/employee/expenses/${id}/approve`}
+            rejectUrl={`/api/employee/expenses/${id}/reject`}
+            queryKeys={['expense-report', id]}
+          />
         </div>
       </div>
 

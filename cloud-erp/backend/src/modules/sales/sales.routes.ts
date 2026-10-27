@@ -472,7 +472,8 @@ router.get('/orders/:id', async (req: Request, res: Response): Promise<void> => 
     const fulfillments = await db('item_fulfillments').where({ so_id: so.id });
     const invoices = await db('invoices').where({ so_id: so.id, is_deleted: false });
     const journalEntries = await fetchJEWithLines('sales_order', so.id, db);
-    res.json({ success: true, data: { ...so, lines, fulfillments, invoices, journalEntries } });
+    const cfgSO = await getConfiguredApproverInfo(req.user!.companyId, 'sales_orders');
+    res.json({ success: true, data: { ...so, lines, fulfillments, invoices, journalEntries, configured_approver_id: cfgSO?.id||null, configured_approver_name: cfgSO?.name||null } });
   } catch (e: any) { console.error("[ERP ERROR]", e.message, e.stack); res.status(500).json({ success: false, error: 'Failed to fetch sales order' }); }
 });
 
@@ -2010,3 +2011,4 @@ salesSubmit('invoices', 'invoices', router);
 salesSubmit('customer_deposits', 'deposits', router);
 salesSubmit('return_authorizations', 'return-authorizations', router);
 salesSubmit('credit_memos', 'credit-memos', router);
+salesSubmit('sales_orders', 'orders', router);

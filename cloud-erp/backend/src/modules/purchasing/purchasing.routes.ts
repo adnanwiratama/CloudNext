@@ -457,7 +457,8 @@ router.get('/orders/:id', async (req: Request, res: Response): Promise<void> => 
       .select('pol.*', 'i.item_code', 'i.name as item_name', 'uom.code as uom_code', 'uom.name as uom_name');
     const receipts = await db('item_receipts').where({ po_id: po.id, is_deleted: false });
     const bills = await db('vendor_bills').where({ po_id: po.id, is_deleted: false });
-    res.json({ success: true, data: { ...po, lines, receipts, bills } });
+    const cfgPO = await getConfiguredApproverInfo(req.user!.companyId, 'purchase_orders');
+    res.json({ success: true, data: { ...po, lines, receipts, bills, configured_approver_id: cfgPO?.id||null, configured_approver_name: cfgPO?.name||null } });
   } catch (e: any) { console.error("[ERP ERROR]", e.message, e.stack); res.status(500).json({ success: false, error: 'Failed to fetch purchase order' }); }
 });
 

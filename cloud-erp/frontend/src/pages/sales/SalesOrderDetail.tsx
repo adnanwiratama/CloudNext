@@ -12,6 +12,7 @@ import { Printer } from 'lucide-react';
 import { usePrintDocument } from '../../hooks/usePrintDocument';
 import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
 import EditTransactionButton from '../../components/transaction/EditTransactionButton';
+import ApprovalBar from '../../components/transaction/ApprovalBar';
 
 export default function SalesOrderDetail() {
   const { id } = useParams<{ id: string }>();
@@ -126,11 +127,21 @@ export default function SalesOrderDetail() {
           <button onClick={() => navigate('/sales/orders')} className="px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50">Back</button>
           <EditTransactionButton permKey="sales_order" to={`/sales/orders/${id}/edit`} />
           <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
-          {canApprove && <button onClick={() => approveMutation.mutate()} disabled={approveMutation.isPending} className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-sm rounded hover:bg-green-700 disabled:opacity-60"><CheckCircle size={13}/> Approve</button>}
-          {canApprove && <button onClick={() => { if (confirm('Reject?')) rejectMutation.mutate(); }} disabled={rejectMutation.isPending} className="px-3 py-1.5 bg-red-600 text-white text-sm rounded hover:bg-red-700 disabled:opacity-60">Reject</button>}
           {canFulfill && <button onClick={() => navigate(`/sales/fulfillments/new?soId=${id}`)} className="flex items-center gap-1 px-3 py-1.5 bg-blue-700 text-white text-sm rounded hover:bg-blue-800"><Truck size={13}/> Fulfillment</button>}
           {canInvoice && <button onClick={() => navigate(`/sales/invoices/new?soId=${id}`)} className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700"><FileText size={13}/> Create Invoice</button>}
           <DeleteTransactionButton type="sales_order" id={id!} listPath="/sales/orders" label={so.so_number} />
+          <ApprovalBar
+            recordType="sales_orders"
+            approvalStatus={so?.approval_status}
+            approvedByName={so?.approved_by_name}
+            approvedAt={so?.approved_at}
+            configuredApproverId={so?.configured_approver_id}
+            configuredApproverName={so?.configured_approver_name}
+            submitUrl={`/api/sales/orders/${id}/submit`}
+            approveUrl={`/api/sales/orders/${id}/approve`}
+            rejectUrl={`/api/sales/orders/${id}/reject`}
+            queryKeys={['sales-order', id]}
+          />
         </div>
       </div>
 
