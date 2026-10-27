@@ -79,9 +79,13 @@ export default function VendorPrepaymentDetail() {
           <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
           <DeleteTransactionButton type="vendor_prepayment" id={id!} listPath="/purchasing/prepayments" label={prep.prepayment_number} />
           <ApprovalBar
+            recordType="vendor_prepayments"
             approvalStatus={prep?.approval_status}
             approvedByName={prep?.approved_by_name}
             approvedAt={prep?.approved_at}
+            configuredApproverId={prep?.configured_approver_id}
+            configuredApproverName={prep?.configured_approver_name}
+            submitUrl={`/api/purchasing/prepayments/${id}/submit`}
             approveUrl={`/api/purchasing/prepayments/${id}/approve`}
             rejectUrl={`/api/purchasing/prepayments/${id}/reject`}
             queryKeys={['vendor-prepayment', id]}

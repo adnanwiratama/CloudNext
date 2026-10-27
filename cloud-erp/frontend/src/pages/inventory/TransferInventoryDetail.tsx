@@ -86,9 +86,13 @@ export default function TransferInventoryDetail() {
           <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
           <DeleteTransactionButton type="inventory_transfer" id={id!} listPath="/inventory/transfers" label={tr.transfer_number} />
           <ApprovalBar
+            recordType="inventory_transfers"
             approvalStatus={tr?.approval_status}
             approvedByName={tr?.approved_by_name}
             approvedAt={tr?.approved_at}
+            configuredApproverId={tr?.configured_approver_id}
+            configuredApproverName={tr?.configured_approver_name}
+            submitUrl={`/api/inventory/transfers/${id}/submit`}
             approveUrl={`/api/inventory/transfers/${id}/approve`}
             rejectUrl={`/api/inventory/transfers/${id}/reject`}
             queryKeys={['inventory-transfer', id]}

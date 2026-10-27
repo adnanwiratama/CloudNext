@@ -85,9 +85,13 @@ export default function CustomerDepositDetail() {
           <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
           <DeleteTransactionButton type="customer_deposit" id={id!} listPath="/sales/deposits" label={dep.deposit_number} />
           <ApprovalBar
+            recordType="customer_deposits"
             approvalStatus={dep?.approval_status}
             approvedByName={dep?.approved_by_name}
             approvedAt={dep?.approved_at}
+            configuredApproverId={dep?.configured_approver_id}
+            configuredApproverName={dep?.configured_approver_name}
+            submitUrl={`/api/sales/deposits/${id}/submit`}
             approveUrl={`/api/sales/deposits/${id}/approve`}
             rejectUrl={`/api/sales/deposits/${id}/reject`}
             queryKeys={['customer-deposit', id]}

@@ -104,9 +104,13 @@ export default function InvoiceDetail() {
           )}
           <DeleteTransactionButton type="invoice" id={id!} listPath="/sales/invoices" label={inv.invoice_number} />
           <ApprovalBar
+            recordType="invoices"
             approvalStatus={inv?.approval_status}
             approvedByName={inv?.approved_by_name}
             approvedAt={inv?.approved_at}
+            configuredApproverId={inv?.configured_approver_id}
+            configuredApproverName={inv?.configured_approver_name}
+            submitUrl={`/api/sales/invoices/${id}/submit`}
             approveUrl={`/api/sales/invoices/${id}/approve`}
             rejectUrl={`/api/sales/invoices/${id}/reject`}
             queryKeys={['invoice', id]}

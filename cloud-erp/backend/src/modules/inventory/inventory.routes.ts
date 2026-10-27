@@ -5,6 +5,7 @@ import { enforcePermissions } from '../../middleware/permissions';
 import { InventoryEngine } from '../../engines/inventory/inventoryEngine';
 import { AccountingEngine } from '../../engines/accounting/accountingEngine';
 import { resolveApprover, creationApprovalState } from '../../utils/approvals';
+import { getConfiguredApproverInfo } from '../../utils/approvals';
 
 const router = Router();
 router.use(authenticate);
@@ -650,7 +651,7 @@ router.post('/adjustments/:id/reject', async (req: Request, res: Response): Prom
     const adj = await db('inventory_adjustments').where({ id: req.params.id, company_id: req.user!.companyId }).first();
     if (!adj || adj.approval_status !== 'pending_approval') { res.status(400).json({ success: false, error: 'Not pending approval' }); return; }
     const [updated] = await db('inventory_adjustments').where({ id: adj.id })
-      .update({ approval_status: 'rejected', memo: `${adj.memo || ''}\n[REJECTED] ${req.body?.reason || 'Rejected'}`.trim() }).returning('*');
+      .update({ approval_status: 'draft', memo: `${adj.memo || ''}\n[REJECTED] ${req.body?.reason || 'Rejected'}`.trim() }).returning('*');
     res.json({ success: true, data: updated, message: 'Adjustment rejected' });
   } catch (e: any) { res.status(500).json({ success: false, error: 'Failed to reject' }); }
 });
@@ -687,7 +688,24 @@ router.post('/transfers/:id/reject', async (req: Request, res: Response): Promis
     const tfr = await db('inventory_transfers').where({ id: req.params.id, company_id: req.user!.companyId }).first();
     if (!tfr || tfr.approval_status !== 'pending_approval') { res.status(400).json({ success: false, error: 'Not pending approval' }); return; }
     const [updated] = await db('inventory_transfers').where({ id: tfr.id })
-      .update({ approval_status: 'rejected', memo: `${tfr.memo || ''}\n[REJECTED] ${req.body?.reason || 'Rejected'}`.trim() }).returning('*');
+      .update({ approval_status: 'draft', memo: `${tfr.memo || ''}\n[REJECTED] ${req.body?.reason || 'Rejected'}`.trim() }).returning('*');
     res.json({ success: true, data: updated, message: 'Transfer rejected' });
   } catch (e: any) { res.status(500).json({ success: false, error: 'Failed to reject' }); }
 });
+
+
+// ─── Submit for Approval (draft → pending_approval) ──────────────────────────
+function invSubmit(table: string, route: string, rtr: typeof router) {
+  rtr.post(`/${route}/:id/submit`, async (req: any, res: any) => {
+    try {
+      const row = await db(table).where({ id: req.params.id, company_id: req.user.companyId }).first();
+      if (!row) { res.status(404).json({ success: false, error: 'Record not found' }); return; }
+      if (!['draft', 'rejected'].includes(row.approval_status || 'draft')) { res.status(400).json({ success: false, error: `Cannot submit — status is ${row.approval_status}` }); return; }
+      const [updated] = await db(table).where({ id: row.id }).update({ approval_status: 'pending_approval' }).returning('*');
+      res.json({ success: true, data: updated, message: 'Submitted for approval' });
+    } catch (e: any) { res.status(500).json({ success: false, error: `Failed: ${e.message}` }); }
+  });
+}
+
+invSubmit('inventory_adjustments', 'adjustments', router);
+invSubmit('inventory_transfers', 'transfers', router);

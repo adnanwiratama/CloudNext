@@ -87,9 +87,13 @@ export default function InventoryAdjustmentDetail() {
           <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
           <DeleteTransactionButton type="inventory_adjustment" id={id!} listPath="/inventory/adjustments" label={adj.adjustment_number} />
           <ApprovalBar
+            recordType="inventory_adjustments"
             approvalStatus={adj?.approval_status}
             approvedByName={adj?.approved_by_name}
             approvedAt={adj?.approved_at}
+            configuredApproverId={adj?.configured_approver_id}
+            configuredApproverName={adj?.configured_approver_name}
+            submitUrl={`/api/inventory/adjustments/${id}/submit`}
             approveUrl={`/api/inventory/adjustments/${id}/approve`}
             rejectUrl={`/api/inventory/adjustments/${id}/reject`}
             queryKeys={['inventory-adjustment', id]}

@@ -10,6 +10,7 @@ import { AccountingEngine } from '../../engines/accounting/accountingEngine';
 import { InventoryEngine } from '../../engines/inventory/inventoryEngine';
 import { AppError } from '../../middleware/errorHandler';
 import { resolveApprover, creationApprovalState } from '../../utils/approvals';
+import { getConfiguredApproverInfo } from '../../utils/approvals';
 
 const router = Router();
 router.use(authenticate);
@@ -956,7 +957,8 @@ router.get('/invoices/:id', async (req: Request, res: Response): Promise<void> =
     const payments = await db('payment_applications as pa').join('customer_payments as cp', 'pa.payment_id', 'cp.id')
       .where({ 'pa.invoice_id': inv.id }).select('pa.*', 'cp.payment_number', 'cp.payment_date', 'cp.payment_method');
     const journalEntries = await fetchJEWithLines('invoice', inv.id, db);
-    res.json({ success: true, data: { ...inv, lines, payments, journalEntries } });
+    const configuredApprover = await getConfiguredApproverInfo(req.user!.companyId, 'invoices');
+    res.json({ success: true, data: { ...inv, lines, payments, journalEntries, configured_approver_id: configuredApprover?.id || null, configured_approver_name: configuredApprover?.name || null } });
   } catch (e: any) { console.error("[ERP ERROR]", e.message, e.stack); res.status(500).json({ success: false, error: 'Failed to fetch invoice' }); }
 });
 
@@ -1011,7 +1013,7 @@ router.post('/invoices/:id/reject', async (req: Request, res: Response): Promise
     }
     const reason = req.body?.reason || 'Rejected by approver';
     const [updated] = await db('invoices').where({ id: inv.id })
-      .update({ approval_status: 'rejected', memo: `${inv.memo || ''}\n[REJECTED] ${reason}`.trim() }).returning('*');
+      .update({ approval_status: 'draft', memo: `${inv.memo || ''}\n[REJECTED] ${reason}`.trim() }).returning('*');
     res.json({ success: true, data: updated, message: 'Invoice rejected' });
   } catch (e: any) { console.error("[ERP ERROR]", e.message); res.status(500).json({ success: false, error: 'Failed to reject invoice' }); }
 });
@@ -1980,7 +1982,7 @@ function salesApproveReject(table: string, sourceType: string, route: string, rt
       const row = await db(table).where({ id: req.params.id, company_id: req.user.companyId }).first();
       if (!row || row.approval_status !== 'pending_approval') { res.status(400).json({ success: false, error: 'Not pending approval' }); return; }
       const [updated] = await db(table).where({ id: row.id })
-        .update({ approval_status: 'rejected', memo: `${row.memo || ''}\n[REJECTED] ${req.body?.reason || 'Rejected'}`.trim() }).returning('*');
+        .update({ approval_status: 'draft', memo: `${row.memo || ''}\n[REJECTED] ${req.body?.reason || 'Rejected'}`.trim() }).returning('*');
       res.json({ success: true, data: updated, message: 'Rejected' });
     } catch (e: any) { res.status(500).json({ success: false, error: `Failed to reject: ${e.message}` }); }
   });
@@ -1989,3 +1991,22 @@ function salesApproveReject(table: string, sourceType: string, route: string, rt
 salesApproveReject('customer_deposits', 'customer_deposit', 'deposits', router);
 salesApproveReject('return_authorizations', 'return_authorization', 'return-authorizations', router);
 salesApproveReject('credit_memos', 'credit_memo', 'credit-memos', router);
+
+// ─── Submit for Approval (draft → pending_approval) ──────────────────────────
+function salesSubmit(table: string, route: string, rtr: typeof router) {
+  rtr.post(`/${route}/:id/submit`, async (req: any, res: any) => {
+    try {
+      const row = await db(table).where({ id: req.params.id, company_id: req.user.companyId }).first();
+      if (!row) { res.status(404).json({ success: false, error: 'Record not found' }); return; }
+      if (!['draft', 'rejected'].includes(row.approval_status || 'draft')) { res.status(400).json({ success: false, error: `Cannot submit — status is ${row.approval_status}` }); return; }
+      const [updated] = await db(table).where({ id: row.id })
+        .update({ approval_status: 'pending_approval' }).returning('*');
+      res.json({ success: true, data: updated, message: 'Submitted for approval' });
+    } catch (e: any) { res.status(500).json({ success: false, error: `Failed to submit: ${e.message}` }); }
+  });
+}
+
+salesSubmit('invoices', 'invoices', router);
+salesSubmit('customer_deposits', 'deposits', router);
+salesSubmit('return_authorizations', 'return-authorizations', router);
+salesSubmit('credit_memos', 'credit-memos', router);

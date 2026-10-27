@@ -81,9 +81,13 @@ export default function VendorCreditDetail() {
           <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
           <DeleteTransactionButton type="vendor_credit" id={id!} listPath="/purchasing/vendor-credits" label={vc.credit_number} />
           <ApprovalBar
+            recordType="vendor_credits"
             approvalStatus={vc?.approval_status}
             approvedByName={vc?.approved_by_name}
             approvedAt={vc?.approved_at}
+            configuredApproverId={vc?.configured_approver_id}
+            configuredApproverName={vc?.configured_approver_name}
+            submitUrl={`/api/purchasing/vendor-credits/${id}/submit`}
             approveUrl={`/api/purchasing/vendor-credits/${id}/approve`}
             rejectUrl={`/api/purchasing/vendor-credits/${id}/reject`}
             queryKeys={['vendor-credit', id]}

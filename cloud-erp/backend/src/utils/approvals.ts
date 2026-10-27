@@ -42,7 +42,20 @@ export async function creationApprovalState(companyId: string, recordType: strin
 }> {
   const approvalRequired = await isApprovalRequired(companyId, recordType);
   return approvalRequired
-    ? { approvalRequired: true, approvalStatus: 'pending_approval', nonPosting: true }
+    ? { approvalRequired: true, approvalStatus: 'draft', nonPosting: true }
     : { approvalRequired: false, approvalStatus: 'approved', nonPosting: false };
 }
 
+
+// Returns the configured approver's id + name (for display on detail pages).
+// Returns null when no approver is configured for the type.
+export async function getConfiguredApproverInfo(
+  companyId: string, recordType: string
+): Promise<{ id: string; name: string } | null> {
+  const approverId = await getConfiguredApprover(companyId, recordType);
+  if (!approverId) return null;
+  try {
+    const user = await db('users').where({ id: approverId, company_id: companyId }).first();
+    return user ? { id: user.id, name: user.name } : null;
+  } catch { return null; }
+}

@@ -5,6 +5,7 @@ import { enforcePermissions } from '../../middleware/permissions';
 import { resolveTransactionNumber } from '../../utils/sequence';
 import { AccountingEngine } from '../../engines/accounting/accountingEngine';
 import { resolveApprover, creationApprovalState } from '../../utils/approvals';
+import { getConfiguredApproverInfo } from '../../utils/approvals';
 import { fetchJEWithLines } from '../../utils/transactionAudit';
 
 const router = Router();
@@ -106,7 +107,8 @@ router.get('/checks/:id', async (req: Request, res: Response): Promise<void> => 
       .first()
       .catch(() => null);
 
-    res.json({ success: true, data: { ...check, lines, itemLines, journalEntry: journalEntry || null } });
+    const cfgChk = await getConfiguredApproverInfo(req.user!.companyId, 'bank_checks');
+    res.json({ success: true, data: { ...check, lines, itemLines, journalEntry: journalEntry || null, configured_approver_id: cfgChk?.id||null, configured_approver_name: cfgChk?.name||null } });
   } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: 'Failed to fetch check' }); }
 });
 
@@ -767,7 +769,8 @@ router.get('/deposits/:id', async (req: Request, res: Response): Promise<void> =
       });
     } catch (_) { lines = []; }
     const journalEntries = await db('journal_entries').where({ source_type: 'bank_deposit', source_id: deposit.id }).first();
-    res.json({ success: true, data: { ...deposit, lines, journalEntry: journalEntries || null } });
+    const cfgDep = await getConfiguredApproverInfo(req.user!.companyId, 'bank_deposits');
+    res.json({ success: true, data: { ...deposit, lines, journalEntry: journalEntries || null, configured_approver_id: cfgDep?.id||null, configured_approver_name: cfgDep?.name||null } });
   } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: 'Failed to fetch deposit' }); }
 });
 
@@ -787,7 +790,8 @@ router.get('/transfers/:id', async (req: Request, res: Response): Promise<void> 
       .first();
     if (!transfer) { res.status(404).json({ success: false, error: 'Transfer not found' }); return; }
     const journalEntry = await db('journal_entries').where({ source_type: 'bank_transfer', source_id: transfer.id }).first();
-    res.json({ success: true, data: { ...transfer, journalEntry: journalEntry || null } });
+    const cfgTfr = await getConfiguredApproverInfo(req.user!.companyId, 'bank_transfers');
+    res.json({ success: true, data: { ...transfer, journalEntry: journalEntry || null, configured_approver_id: cfgTfr?.id||null, configured_approver_name: cfgTfr?.name||null } });
   } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: 'Failed to fetch transfer' }); }
 });
 
@@ -820,7 +824,7 @@ function bankApproveReject(table: string, sourceType: string, router: any) {
         if (row.approval_status !== 'pending_approval') { res.status(400).json({ success: false, error: 'Not pending approval' }); return; }
         const reason = req.body?.reason || 'Rejected by approver';
         const [updated] = await db(table).where({ id: row.id })
-          .update({ approval_status: 'rejected', memo: `${row.memo || ''}\n[REJECTED] ${reason}`.trim(), status: 'rejected' }).returning('*');
+          .update({ approval_status: 'draft', memo: `${row.memo || ''}\n[REJECTED] ${reason}`.trim() }).returning('*');
         res.json({ success: true, data: updated, message: 'Rejected' });
       } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: `Failed to reject: ${e.message}` }); }
     });
@@ -837,3 +841,21 @@ router.get('/deposits/:id/audit', async (req: any, res: any) => {
 router.get('/transfers/:id/audit', async (req: any, res: any) => {
   try { const l = await (db as any)('transaction_audit_log').where({ company_id: req.user.companyId, source_type: 'bank_transfer', source_id: req.params.id }).orderBy('performed_at','desc').limit(200); res.json({ success:true, data:l }); } catch(e:any){ res.status(500).json({success:false,error:e.message}); }
 });
+
+
+// ─── Submit for Approval (draft → pending_approval) ──────────────────────────
+function bankSubmit(table: string, route: string, rtr: any) {
+  rtr.post(`/${route}/:id/submit`, async (req: any, res: any) => {
+    try {
+      const row = await db(table).where({ id: req.params.id, company_id: req.user.companyId }).first();
+      if (!row) { res.status(404).json({ success: false, error: 'Record not found' }); return; }
+      if (!['draft', 'rejected'].includes(row.approval_status || 'draft')) { res.status(400).json({ success: false, error: `Cannot submit — status is ${row.approval_status}` }); return; }
+      const [updated] = await db(table).where({ id: row.id }).update({ approval_status: 'pending_approval' }).returning('*');
+      res.json({ success: true, data: updated, message: 'Submitted for approval' });
+    } catch (e: any) { res.status(500).json({ success: false, error: `Failed: ${e.message}` }); }
+  });
+}
+
+bankSubmit('bank_checks', 'checks', router);
+bankSubmit('bank_deposits', 'deposits', router);
+bankSubmit('bank_transfers', 'transfers', router);

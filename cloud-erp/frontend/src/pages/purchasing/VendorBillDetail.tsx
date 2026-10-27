@@ -116,9 +116,13 @@ export default function VendorBillDetail() {
           )}
           <DeleteTransactionButton type="vendor_bill" id={id!} listPath="/purchasing/bills" label={bill.bill_number} />
           <ApprovalBar
+            recordType="vendor_bills"
             approvalStatus={bill?.approval_status}
             approvedByName={bill?.approved_by_name}
             approvedAt={bill?.approved_at}
+            configuredApproverId={bill?.configured_approver_id}
+            configuredApproverName={bill?.configured_approver_name}
+            submitUrl={`/api/purchasing/bills/${id}/submit`}
             approveUrl={`/api/purchasing/bills/${id}/approve`}
             rejectUrl={`/api/purchasing/bills/${id}/reject`}
             queryKeys={['vendor-bill', id]}

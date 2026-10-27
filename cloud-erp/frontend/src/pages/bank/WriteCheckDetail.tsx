@@ -164,9 +164,13 @@ export default function WriteCheckDetail() {
           <button onClick={handlePrint} className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-700 text-white text-sm font-medium rounded hover:bg-blue-800"><Printer size={13}/> Print</button>
           <DeleteTransactionButton type="bank_check" id={id!} listPath="/bank/checks-list" label={data.check_number} />
           <ApprovalBar
+            recordType="bank_checks"
             approvalStatus={data?.approval_status}
             approvedByName={data?.approved_by_name}
             approvedAt={data?.approved_at}
+            configuredApproverId={data?.configured_approver_id}
+            configuredApproverName={data?.configured_approver_name}
+            submitUrl={`/api/bank/checks/${id}/submit`}
             approveUrl={`/api/bank/checks/${id}/approve`}
             rejectUrl={`/api/bank/checks/${id}/reject`}
             queryKeys={['check', id]}

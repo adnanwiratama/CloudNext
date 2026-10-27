@@ -85,9 +85,13 @@ export default function TransferDetail() {
           <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
           <DeleteTransactionButton type="bank_transfer" id={id!} listPath="/bank/transfers-list" label={data.transfer_number} />
           <ApprovalBar
+            recordType="bank_transfers"
             approvalStatus={data?.approval_status}
             approvedByName={data?.approved_by_name}
             approvedAt={data?.approved_at}
+            configuredApproverId={data?.configured_approver_id}
+            configuredApproverName={data?.configured_approver_name}
+            submitUrl={`/api/bank/transfers/${id}/submit`}
             approveUrl={`/api/bank/transfers/${id}/approve`}
             rejectUrl={`/api/bank/transfers/${id}/reject`}
             queryKeys={['transfer', id]}

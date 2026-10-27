@@ -84,9 +84,13 @@ export default function CreditMemoDetail() {
           <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
           <DeleteTransactionButton type="credit_memo" id={id!} listPath="/sales/credit-memos" label={cm.memo_number} />
           <ApprovalBar
+            recordType="credit_memos"
             approvalStatus={cm?.approval_status}
             approvedByName={cm?.approved_by_name}
             approvedAt={cm?.approved_at}
+            configuredApproverId={cm?.configured_approver_id}
+            configuredApproverName={cm?.configured_approver_name}
+            submitUrl={`/api/sales/credit-memos/${id}/submit`}
             approveUrl={`/api/sales/credit-memos/${id}/approve`}
             rejectUrl={`/api/sales/credit-memos/${id}/reject`}
             queryKeys={['credit-memo', id]}

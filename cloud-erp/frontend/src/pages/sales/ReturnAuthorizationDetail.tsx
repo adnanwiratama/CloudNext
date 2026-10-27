@@ -81,9 +81,13 @@ export default function ReturnAuthorizationDetail() {
           <button onClick={handlePrint} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50"><Printer size={13}/> Print</button>
           <DeleteTransactionButton type="return_authorization" id={id!} listPath="/sales/return-authorizations" label={ra.ra_number} />
           <ApprovalBar
+            recordType="return_authorizations"
             approvalStatus={ra?.approval_status}
             approvedByName={ra?.approved_by_name}
             approvedAt={ra?.approved_at}
+            configuredApproverId={ra?.configured_approver_id}
+            configuredApproverName={ra?.configured_approver_name}
+            submitUrl={`/api/sales/return-authorizations/${id}/submit`}
             approveUrl={`/api/sales/return-authorizations/${id}/approve`}
             rejectUrl={`/api/sales/return-authorizations/${id}/reject`}
             queryKeys={['return-authorization', id]}

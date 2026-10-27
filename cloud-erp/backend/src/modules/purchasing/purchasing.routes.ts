@@ -10,6 +10,7 @@ import { AccountingEngine } from '../../engines/accounting/accountingEngine';
 import { InventoryEngine } from '../../engines/inventory/inventoryEngine';
 import { AppError } from '../../middleware/errorHandler';
 import { resolveApprover, creationApprovalState } from '../../utils/approvals';
+import { getConfiguredApproverInfo } from '../../utils/approvals';
 
 const router = Router();
 router.use(authenticate);
@@ -1042,7 +1043,8 @@ router.get('/bills/:id', async (req: Request, res: Response): Promise<void> => {
       .select('bpa.*', 'vp.payment_number', 'vp.payment_date', 'vp.payment_method');
 
     const journalEntries = await fetchJEWithLines('vendor_bill', bill.id, db);
-    res.json({ success: true, data: { ...bill, lines, payments, journalEntries } });
+    const configuredApproverVB = await getConfiguredApproverInfo(req.user!.companyId, 'vendor_bills');
+    res.json({ success: true, data: { ...bill, lines, payments, journalEntries, configured_approver_id: configuredApproverVB?.id || null, configured_approver_name: configuredApproverVB?.name || null } });
   } catch (e: any) { console.error("[ERP ERROR]", e.message); res.status(500).json({ success: false, error: 'Failed to fetch vendor bill' }); }
 });
 
@@ -1079,7 +1081,7 @@ router.post('/bills/:id/reject', async (req: Request, res: Response): Promise<vo
     }
     const reason = req.body?.reason || 'Rejected by approver';
     const [updated] = await db('vendor_bills').where({ id: bill.id })
-      .update({ approval_status: 'rejected', memo: `${bill.memo || ''}\n[REJECTED] ${reason}`.trim() }).returning('*');
+      .update({ approval_status: 'draft', memo: `${bill.memo || ''}\n[REJECTED] ${reason}`.trim() }).returning('*');
     res.json({ success: true, data: updated, message: 'Vendor bill rejected' });
   } catch (e: any) { console.error("[ERP ERROR]", e.message); res.status(500).json({ success: false, error: 'Failed to reject vendor bill' }); }
 });
@@ -2075,7 +2077,7 @@ function purchApproveReject(table: string, sourceType: string, route: string, rt
       const row = await db(table).where({ id: req.params.id, company_id: req.user.companyId }).first();
       if (!row || row.approval_status !== 'pending_approval') { res.status(400).json({ success: false, error: 'Not pending approval' }); return; }
       const [updated] = await db(table).where({ id: row.id })
-        .update({ approval_status: 'rejected', memo: `${row.memo || ''}\n[REJECTED] ${req.body?.reason || 'Rejected'}`.trim() }).returning('*');
+        .update({ approval_status: 'draft', memo: `${row.memo || ''}\n[REJECTED] ${req.body?.reason || 'Rejected'}`.trim() }).returning('*');
       res.json({ success: true, data: updated, message: 'Rejected' });
     } catch (e: any) { res.status(500).json({ success: false, error: `Failed to reject: ${e.message}` }); }
   });
@@ -2083,3 +2085,23 @@ function purchApproveReject(table: string, sourceType: string, route: string, rt
 
 purchApproveReject('vendor_prepayments', 'vendor_prepayment', 'prepayments', router);
 purchApproveReject('vendor_credits', 'vendor_credit', 'vendor-credits', router);
+
+// ─── Submit for Approval (draft → pending_approval) ──────────────────────────
+function purchSubmit(table: string, route: string, rtr: typeof router) {
+  rtr.post(`/${route}/:id/submit`, async (req: any, res: any) => {
+    try {
+      const row = await db(table).where({ id: req.params.id, company_id: req.user.companyId }).first();
+      if (!row) { res.status(404).json({ success: false, error: 'Record not found' }); return; }
+      if (!['draft', 'rejected'].includes(row.approval_status || 'draft')) { res.status(400).json({ success: false, error: `Cannot submit — status is ${row.approval_status}` }); return; }
+      const [updated] = await db(table).where({ id: row.id }).update({ approval_status: 'pending_approval' }).returning('*');
+      res.json({ success: true, data: updated, message: 'Submitted for approval' });
+    } catch (e: any) { res.status(500).json({ success: false, error: `Failed: ${e.message}` }); }
+  });
+}
+
+purchSubmit('vendor_bills', 'bills', router);
+purchSubmit('vendor_prepayments', 'prepayments', router);
+purchSubmit('vendor_credits', 'vendor-credits', router);
+// PO and PR already have submit-style flows via their own approve logic
+purchSubmit('purchase_orders', 'orders', router);
+purchSubmit('purchase_requisitions', 'requisitions', router);
