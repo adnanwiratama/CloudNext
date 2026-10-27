@@ -1,8 +1,7 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { ChevronUp, ChevronDown, Loader2, CheckCircle2, CheckCircle, AlertCircle, FileText, Printer } from 'lucide-react';
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
+import { ChevronUp, ChevronDown, Loader2, CheckCircle2, CheckCircle, AlertCircle, FileText, Printer, Send, XCircle } from 'lucide-react';
 import { useState, useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import { formatCurrency, formatDate, formatNumber, formatStatus } from '../../utils/format';
 import TransactionLink from '../../components/common/TransactionLink';
@@ -11,7 +10,8 @@ import TransactionSysInfoTab from '../../components/transaction/TransactionSysIn
 import { usePrintDocument } from '../../hooks/usePrintDocument';
 import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
 import EditTransactionButton from '../../components/transaction/EditTransactionButton';
-import ApprovalBar from '../../components/transaction/ApprovalBar';
+import toast from 'react-hot-toast';
+import { useAuthStore } from '../../store/authStore';
 
 export default function VendorBillDetail() {
   const { id } = useParams<{ id: string }>();
@@ -31,6 +31,30 @@ export default function VendorBillDetail() {
     queryFn: () => api.get(`/api/purchasing/bills/${id}`).then(r => r.data.data),
     enabled: !!id, staleTime: 0, refetchOnMount: true,
   });
+
+  const user = useAuthStore(s => s.user);
+
+  // ── Approval mutations ─────────────────────────────────────────────────────
+  const submitMutation = useMutation({
+    mutationFn: () => api.post(`/api/purchasing/bills/${id}/submit`),
+    onSuccess: () => { toast.success('Submitted for approval'); qc.invalidateQueries({ queryKey: ['vendor-bill', id] }); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to submit'),
+  });
+
+  const approveMutation = useMutation({
+    mutationFn: () => api.post(`/api/purchasing/bills/${id}/approve`),
+    onSuccess: () => { toast.success('Bill approved — GL posted'); qc.invalidateQueries({ queryKey: ['vendor-bill', id] }); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to approve'),
+  });
+
+  const rejectMutation = useMutation({
+    mutationFn: () => api.post(`/api/purchasing/bills/${id}/reject`, { reason: 'Rejected by approver' }),
+    onSuccess: () => { toast.success('Bill rejected — returned to Draft'); qc.invalidateQueries({ queryKey: ['vendor-bill', id] }); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to reject'),
+  });
+
+  // Who can approve/reject? Configured approver or admin
+  const canApproveReject = user?.isAdmin || (bill?.configured_approver_id && user?.id === bill.configured_approver_id);
 
   const { print } = usePrintDocument();
 
@@ -115,18 +139,29 @@ export default function VendorBillDetail() {
             </button>
           )}
           <DeleteTransactionButton type="vendor_bill" id={id!} listPath="/purchasing/bills" label={bill.bill_number} />
-          <ApprovalBar
-            recordType="vendor_bills"
-            approvalStatus={bill?.approval_status}
-            approvedByName={bill?.approved_by_name}
-            approvedAt={bill?.approved_at}
-            configuredApproverId={bill?.configured_approver_id}
-            configuredApproverName={bill?.configured_approver_name}
-            submitUrl={`/api/purchasing/bills/${id}/submit`}
-            approveUrl={`/api/purchasing/bills/${id}/approve`}
-            rejectUrl={`/api/purchasing/bills/${id}/reject`}
-            queryKeys={['vendor-bill', id]}
-          />
+          
+          {/* Approval buttons */}
+          {bill.approval_status === 'draft' && (
+            <button onClick={() => submitMutation.mutate()} disabled={submitMutation.isPending}
+              className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 disabled:opacity-60">
+              {submitMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+              Submit for Approval
+            </button>
+          )}
+          {bill.approval_status === 'pending_approval' && canApproveReject && (
+            <>
+              <button onClick={() => approveMutation.mutate()} disabled={approveMutation.isPending}
+                className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white text-sm font-medium rounded hover:bg-emerald-700 disabled:opacity-60">
+                {approveMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle size={13} />}
+                Approve
+              </button>
+              <button onClick={() => { if (confirm('Reject this bill?')) rejectMutation.mutate(); }} disabled={rejectMutation.isPending}
+                className="flex items-center gap-1 px-3 py-1.5 bg-red-600 text-white text-sm font-medium rounded hover:bg-red-700 disabled:opacity-60">
+                {rejectMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <XCircle size={13} />}
+                Reject
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -159,6 +194,19 @@ export default function VendorBillDetail() {
                   <div><label className="block text-xs text-slate-500 mb-1">GL Posted</label><input readOnly value={bill.is_posted?'Yes':'Pending'} className={`${dis} ${bill.is_posted?'text-green-700':''}`}/></div>
                 </div>
                 <div className="space-y-3">
+                  <div><label className="block text-xs text-slate-500 mb-1">Approved By</label><input readOnly value={bill.approved_by_name||bill.configured_approver_name||'—'} className={dis}/></div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Approval Status</label>
+                    <div className={`w-full border border-slate-200 rounded text-sm px-2 py-1.5 bg-slate-50 font-medium ${
+                      bill.approval_status==='approved'?'text-emerald-600':
+                      bill.approval_status==='pending_approval'?'text-amber-600':
+                      bill.approval_status==='rejected'?'text-red-600':'text-slate-600'
+                    }`}>
+                      {bill.approval_status==='approved'?'Approved':
+                       bill.approval_status==='pending_approval'?'Pending Approval':
+                       bill.approval_status==='rejected'?'Rejected':'Draft'}
+                    </div>
+                  </div>
                   {/* Summary box (fixed top-right, always last in column) */}
                   <div className="border border-slate-200 rounded overflow-hidden">
                     <div className="bg-slate-600 text-white text-xs font-semibold px-3 py-1.5">Summary</div>
@@ -280,10 +328,19 @@ export default function VendorBillDetail() {
             {activeTab==='files' && <TransactionFilesTab sourceType="vendor_bill" sourceId={id!}/>}
             {activeTab==='gl' && (
               <div>
-                <div className="mb-3 text-xs bg-blue-50 border border-blue-100 rounded p-3 text-blue-800">
-                  <p className="font-medium mb-1">GL Impact (Vendor Bill):</p>
-                  <p><strong>Dr. Accrued AP/GR-IR (2110) → Cr. Accounts Payable (2100)</strong></p>
-                  <p className="mt-1 text-blue-600">Clears the GR-IR accrual and records the AP liability</p>
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="text-xs bg-blue-50 border border-blue-100 rounded p-3 text-blue-800 flex-1">
+                    <p className="font-medium mb-1">GL Impact (Vendor Bill):</p>
+                    <p><strong>Dr. Accrued AP/GR-IR (2110) → Cr. Accounts Payable (2100)</strong></p>
+                    <p className="mt-1 text-blue-600">Clears the GR-IR accrual and records the AP liability</p>
+                  </div>
+                  <div className="ml-3">
+                    <span className={`px-3 py-1.5 rounded text-xs font-semibold ${
+                      bill.approval_status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                    }`}>
+                      {bill.approval_status === 'approved' ? 'Posted' : 'Non-Posting'}
+                    </span>
+                  </div>
                 </div>
                 {(bill.journalEntries||[]).length > 0 ? (
                   <div className="border border-slate-200 rounded overflow-x-auto">
