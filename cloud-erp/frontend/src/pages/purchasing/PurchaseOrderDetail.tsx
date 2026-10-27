@@ -1,6 +1,6 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronUp, ChevronDown, CheckCircle, Package, FileText, Loader2, CheckCircle2, ShoppingCart, Lock, Unlock, Printer } from 'lucide-react';
+import { ChevronUp, ChevronDown, CheckCircle, Package, FileText, Loader2, CheckCircle2, ShoppingCart, Lock, Unlock, Printer, Send, XCircle } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { formatCurrency, formatDate, formatNumber, formatStatus } from '../../utils/format';
@@ -12,7 +12,7 @@ import TransactionSysInfoTab from '../../components/transaction/TransactionSysIn
 import { usePrintDocument } from '../../hooks/usePrintDocument';
 import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
 import EditTransactionButton from '../../components/transaction/EditTransactionButton';
-import ApprovalBar from '../../components/transaction/ApprovalBar';
+import { useAuthStore } from '../../store/authStore';
 
 export default function PurchaseOrderDetail() {
   const { id } = useParams<{ id: string }>();
@@ -33,6 +33,13 @@ export default function PurchaseOrderDetail() {
     enabled: !!id, staleTime: 0, refetchOnMount: true,
   });
 
+  const user = useAuthStore(s => s.user);
+
+  const submitMutation = useMutation({
+    mutationFn: () => api.post(`/api/purchasing/orders/${id}/submit`),
+    onSuccess: () => { toast.success('Submitted for approval'); qc.invalidateQueries({ queryKey: ['purchase-order', id] }); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to submit'),
+  });
   const approveMutation = useMutation({
     mutationFn: () => api.post(`/api/purchasing/orders/${id}/approve`),
     onSuccess: () => { toast.success('PO approved'); qc.invalidateQueries({ queryKey: ['purchase-order', id] }); },
@@ -40,9 +47,10 @@ export default function PurchaseOrderDetail() {
   });
   const rejectMutation = useMutation({
     mutationFn: () => api.post(`/api/purchasing/orders/${id}/reject`, { reason: 'Rejected via UI' }),
-    onSuccess: () => { toast.success('PO rejected'); qc.invalidateQueries({ queryKey: ['purchase-order', id] }); },
+    onSuccess: () => { toast.success('PO rejected — returned to Draft'); qc.invalidateQueries({ queryKey: ['purchase-order', id] }); },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed'),
   });
+  const canApproveReject = user?.isAdmin || (po?.configured_approver_id && user?.id === po.configured_approver_id);
   const closeMutation = useMutation({
     mutationFn: () => api.post(`/api/purchasing/orders/${id}/close`),
     onSuccess: () => { toast.success('PO closed'); qc.invalidateQueries({ queryKey: ['purchase-order', id] }); },
@@ -126,18 +134,29 @@ export default function PurchaseOrderDetail() {
           {canClose && <button onClick={() => { if (confirm('Close this PO? Item Receipt and Create Bill will no longer be available until it is reopened.')) closeMutation.mutate(); }} disabled={closeMutation.isPending} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50 disabled:opacity-60"><Lock size={13}/> Closed</button>}
           {isClosed && <button onClick={() => reopenMutation.mutate()} disabled={reopenMutation.isPending} className="flex items-center gap-1 px-3 py-1.5 border border-slate-300 bg-white text-sm text-slate-700 rounded hover:bg-slate-50 disabled:opacity-60"><Unlock size={13}/> Reopen</button>}
           <DeleteTransactionButton type="purchase_order" id={id!} listPath="/purchasing/orders" label={po.po_number} />
-          <ApprovalBar
-            recordType="purchase_orders"
-            approvalStatus={po?.approval_status}
-            approvedByName={po?.approved_by_name}
-            approvedAt={po?.approved_at}
-            configuredApproverId={po?.configured_approver_id}
-            configuredApproverName={po?.configured_approver_name}
-            submitUrl={`/api/purchasing/orders/${id}/submit`}
-            approveUrl={`/api/purchasing/orders/${id}/approve`}
-            rejectUrl={`/api/purchasing/orders/${id}/reject`}
-            queryKeys={['purchase-order', id]}
-          />
+          
+          {/* Approval buttons */}
+          {po.status === 'draft' && (
+            <button onClick={() => submitMutation.mutate()} disabled={submitMutation.isPending}
+              className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 disabled:opacity-60">
+              {submitMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+              Submit for Approval
+            </button>
+          )}
+          {po.status === 'pending_approval' && canApproveReject && (
+            <>
+              <button onClick={() => approveMutation.mutate()} disabled={approveMutation.isPending}
+                className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white text-sm font-medium rounded hover:bg-emerald-700 disabled:opacity-60">
+                {approveMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle size={13} />}
+                Approve
+              </button>
+              <button onClick={() => { if (confirm('Reject this PO?')) rejectMutation.mutate(); }} disabled={rejectMutation.isPending}
+                className="flex items-center gap-1 px-3 py-1.5 bg-red-600 text-white text-sm font-medium rounded hover:bg-red-700 disabled:opacity-60">
+                {rejectMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <XCircle size={13} />}
+                Reject
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -167,10 +186,22 @@ export default function PurchaseOrderDetail() {
                   <div><label className="block text-xs text-slate-500 mb-1">Currency</label><input readOnly value={po.currency||''} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Payment Terms</label><input readOnly value={po.payment_terms||''} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Status</label><input readOnly value={po.status?.replace(/_/g,' ')||''} className={dis}/></div>
-                  <div><label className="block text-xs text-slate-500 mb-1">Approved By</label><input readOnly value={po.approved_by_name||''} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Memo</label><input readOnly value={po.memo||''} className={dis}/></div>
                 </div>
                 <div className="space-y-3">
+                  <div><label className="block text-xs text-slate-500 mb-1">Approved By</label><input readOnly value={po.approved_by_name||po.configured_approver_name||'—'} className={dis}/></div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Approval Status</label>
+                    <div className={`w-full border border-slate-200 rounded text-sm px-2 py-1.5 bg-slate-50 font-medium ${
+                      po.status==='pending_receipt'||po.status==='fully_billed'?'text-emerald-600':
+                      po.status==='pending_approval'?'text-amber-600':
+                      po.status==='cancelled'?'text-red-600':'text-slate-600'
+                    }`}>
+                      {po.status==='pending_receipt'||po.status==='fully_billed'?'Approved':
+                       po.status==='pending_approval'?'Pending Approval':
+                       po.status==='cancelled'?'Cancelled':'Draft'}
+                    </div>
+                  </div>
                   {/* Summary box */}
                   <div className="border border-slate-200 rounded overflow-hidden">
                     <div className="bg-slate-600 text-white text-xs font-semibold px-3 py-1.5">Summary</div>
