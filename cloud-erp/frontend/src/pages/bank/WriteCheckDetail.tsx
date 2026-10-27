@@ -1,11 +1,12 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronUp, ChevronDown, Loader2, Printer, CheckCircle2 } from 'lucide-react';
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
+import { ChevronUp, ChevronDown, Loader2, Printer, CheckCircle2, Send, CheckCircle, XCircle } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
 import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
 import EditTransactionButton from '../../components/transaction/EditTransactionButton';
-import ApprovalBar from '../../components/transaction/ApprovalBar';
+import toast from 'react-hot-toast';
+import { useAuthStore } from '../../store/authStore';
 
 export default function WriteCheckDetail() {
   const { id }     = useParams<{ id: string }>();
@@ -42,6 +43,30 @@ export default function WriteCheckDetail() {
     enabled:  !!id, staleTime: 0,
   });
   const attachedFiles: any[] = filesRaw || [];
+
+  const user = useAuthStore(s => s.user);
+
+  // ── Approval mutations ─────────────────────────────────────────────────────
+  const submitMutation = useMutation({
+    mutationFn: () => api.post(`/api/bank/checks/${id}/submit`),
+    onSuccess: () => { toast.success('Submitted for approval'); qc.invalidateQueries({ queryKey: ['check', id] }); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to submit'),
+  });
+
+  const approveMutation = useMutation({
+    mutationFn: () => api.post(`/api/bank/checks/${id}/approve`),
+    onSuccess: () => { toast.success('Check approved — GL posted'); qc.invalidateQueries({ queryKey: ['check', id] }); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to approve'),
+  });
+
+  const rejectMutation = useMutation({
+    mutationFn: () => api.post(`/api/bank/checks/${id}/reject`, { reason: 'Rejected by approver' }),
+    onSuccess: () => { toast.success('Check rejected — returned to Draft'); qc.invalidateQueries({ queryKey: ['check', id] }); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to reject'),
+  });
+
+  // Who can approve/reject? Configured approver or admin
+  const canApproveReject = user?.isAdmin || (data?.configured_approver_id && user?.id === data.configured_approver_id);
 
   // ── Print ──────────────────────────────────────────────────────────────────
   const handlePrint = () => {
@@ -163,18 +188,29 @@ export default function WriteCheckDetail() {
           <EditTransactionButton permKey="check" to={`/bank/checks/${id}/edit`} />
           <button onClick={handlePrint} className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-700 text-white text-sm font-medium rounded hover:bg-blue-800"><Printer size={13}/> Print</button>
           <DeleteTransactionButton type="bank_check" id={id!} listPath="/bank/checks-list" label={data.check_number} />
-          <ApprovalBar
-            recordType="bank_checks"
-            approvalStatus={data?.approval_status}
-            approvedByName={data?.approved_by_name}
-            approvedAt={data?.approved_at}
-            configuredApproverId={data?.configured_approver_id}
-            configuredApproverName={data?.configured_approver_name}
-            submitUrl={`/api/bank/checks/${id}/submit`}
-            approveUrl={`/api/bank/checks/${id}/approve`}
-            rejectUrl={`/api/bank/checks/${id}/reject`}
-            queryKeys={['check', id]}
-          />
+          
+          {/* Approval buttons */}
+          {data.approval_status === 'draft' && (
+            <button onClick={() => submitMutation.mutate()} disabled={submitMutation.isPending}
+              className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 disabled:opacity-60">
+              {submitMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+              Submit for Approval
+            </button>
+          )}
+          {data.approval_status === 'pending_approval' && canApproveReject && (
+            <>
+              <button onClick={() => approveMutation.mutate()} disabled={approveMutation.isPending}
+                className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white text-sm font-medium rounded hover:bg-emerald-700 disabled:opacity-60">
+                {approveMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle size={13} />}
+                Approve
+              </button>
+              <button onClick={() => { if (confirm('Reject this check?')) rejectMutation.mutate(); }} disabled={rejectMutation.isPending}
+                className="flex items-center gap-1 px-3 py-1.5 bg-red-600 text-white text-sm font-medium rounded hover:bg-red-700 disabled:opacity-60">
+                {rejectMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <XCircle size={13} />}
+                Reject
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -217,6 +253,19 @@ export default function WriteCheckDetail() {
                 <div className="space-y-3">
                   <div><label className="block text-xs text-slate-500 mb-1">Check #</label><input readOnly value={data.check_number_manual||data.check_number||''} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Memo</label><input readOnly value={data.memo||''} className={dis}/></div>
+                  <div><label className="block text-xs text-slate-500 mb-1">Approved By</label><input readOnly value={data.approved_by_name||data.configured_approver_name||'—'} className={dis}/></div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Approval Status</label>
+                    <div className={`w-full border border-slate-200 rounded text-sm px-2 py-1.5 bg-slate-50 font-medium ${
+                      data.approval_status==='approved'?'text-emerald-600':
+                      data.approval_status==='pending_approval'?'text-amber-600':
+                      data.approval_status==='rejected'?'text-red-600':'text-slate-600'
+                    }`}>
+                      {data.approval_status==='approved'?'Approved':
+                       data.approval_status==='pending_approval'?'Pending Approval':
+                       data.approval_status==='rejected'?'Rejected':'Draft'}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -463,7 +512,7 @@ export default function WriteCheckDetail() {
             {/* ── GL Impact ── */}
             {activeTab==='gl' && (
               <div>
-                {/* Posting field */}
+                {/* Posting badge based on approval_status */}
                 <div className="mb-3 flex items-center gap-3 px-1">
                   <span className="text-sm font-medium text-slate-700">Posting:</span>
                   {data.journalEntry ? (
@@ -473,15 +522,14 @@ export default function WriteCheckDetail() {
                       {data.journalEntry.journal_number}
                     </a>
                   ) : (
-                    <span className="text-sm text-slate-400 italic">No journal entry linked</span>
+                    <span className="text-sm text-slate-400 italic">No journal entry</span>
                   )}
-                  {data.journalEntry?.status && (
-                    <span className={`inline-flex px-2 py-0.5 text-xs rounded-full font-medium ml-1
-                      ${data.journalEntry.status==='posted' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600'}`}>
-                      {data.journalEntry.status}
-                    </span>
+                  {/* Posting badge: non_posting when draft/pending/rejected, posted when approved */}
+                  {data.approval_status === 'approved' ? (
+                    <span className="inline-flex px-2 py-0.5 text-xs rounded-full font-medium bg-green-100 text-green-700">Posted</span>
+                  ) : (
+                    <span className="inline-flex px-2 py-0.5 text-xs rounded-full font-medium bg-amber-100 text-amber-700">Non-Posting</span>
                   )}
-                  {data.journalEntry?.status === 'non_posting' && <span className="ml-2 px-1.5 py-0.5 text-xs bg-amber-100 text-amber-700 rounded">Non-Posting</span>}
                 </div>
 
                 <div className="border border-slate-200 rounded overflow-x-auto">
@@ -509,7 +557,13 @@ export default function WriteCheckDetail() {
                         <td className="px-3 py-1.5 text-right text-slate-800 font-medium">{gl.credit>0?gl.credit.toLocaleString('id-ID',{minimumFractionDigits:2}):''}</td>
                         <td className="px-3 py-1.5 text-slate-500">{gl.dept}</td>
                         <td className="px-3 py-1.5 text-slate-500">{gl.loc}</td>
-                        <td className="px-3 py-1.5 text-center"><span className="inline-flex px-1.5 py-0.5 text-xs rounded-full font-medium bg-green-100 text-green-700">Yes</span></td>
+                        <td className="px-3 py-1.5 text-center">
+                          {data.approval_status === 'approved' ? (
+                            <span className="inline-flex px-1.5 py-0.5 text-xs rounded-full font-medium bg-green-100 text-green-700">Yes</span>
+                          ) : (
+                            <span className="inline-flex px-1.5 py-0.5 text-xs rounded-full font-medium bg-amber-100 text-amber-700">No</span>
+                          )}
+                        </td>
                         <td className="px-3 py-1.5 text-slate-500">{gl.memo}</td>
                       </tr>
                     ))}
