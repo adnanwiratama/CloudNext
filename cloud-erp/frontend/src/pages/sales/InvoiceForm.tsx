@@ -352,7 +352,7 @@ export default function InvoiceForm() {
                       </select></div>
                     <div><label className="block text-xs text-slate-500 mb-1">Memo</label>
                       <textarea value={form.memo} onChange={e=>set('memo',e.target.value)} rows={3} className={`${dis} resize-none`}/></div>
-                    <ApprovalFields
+                    <ApprovalFields showAlways={true}
                       approvalStatus={existingInvoice?.approval_status}
                       configuredApproverName={existingInvoice?.configured_approver_name}
                       approvedByName={existingInvoice?.approved_by_name}

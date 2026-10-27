@@ -444,7 +444,7 @@ export default function SalesOrderForm() {
                       <input type="text" value={form.memo} onChange={e => set('memo', e.target.value)}
                         className={dis} placeholder="Internal notes..."/>
                     </div>
-                    <ApprovalFields
+                    <ApprovalFields showAlways={true}
                       approvalStatus={existingSO?.approval_status}
                       configuredApproverName={existingSO?.configured_approver_name}
                       approvedByName={existingSO?.approved_by_name}

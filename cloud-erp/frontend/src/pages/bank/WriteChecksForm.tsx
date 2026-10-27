@@ -435,7 +435,7 @@ export default function WriteChecksForm() {
                     <input type="text" value={form.memo} onChange={e => set('memo', e.target.value)}
                       className="w-full border border-slate-300 rounded text-sm px-2 py-1.5 focus:outline-none focus:border-blue-400"/>
                   </div>
-                  <ApprovalFields
+                  <ApprovalFields showAlways={true}
                     approvalStatus={existingCheck?.approval_status}
                     configuredApproverName={existingCheck?.configured_approver_name}
                     approvedByName={existingCheck?.approved_by_name}

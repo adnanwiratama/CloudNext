@@ -382,7 +382,7 @@ export default function PurchaseOrderForm() {
                     <label className={lbl}>Memo</label>
                     <input type="text" className={inp} value={form.memo} onChange={e => set('memo', e.target.value)} placeholder="Internal notes..."/>
                   </div>
-                  <ApprovalFields
+                  <ApprovalFields showAlways={true}
                     approvalStatus={existingPO?.approval_status}
                     configuredApproverName={existingPO?.configured_approver_name}
                     approvedByName={existingPO?.approved_by_name}
