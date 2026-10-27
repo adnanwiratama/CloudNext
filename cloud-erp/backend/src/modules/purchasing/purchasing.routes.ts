@@ -415,6 +415,17 @@ router.post('/requisitions/:id/approve', async (req: Request, res: Response): Pr
     const prApprover = await resolveApprover(req.user!.companyId, 'purchase_requisitions', req.user!.id);
     const [updated] = await db('purchase_requisitions').where({ id: pr.id })
       .update({ status: 'approved', approved_by: prApprover, approved_at: new Date() }).returning('*');
+    
+    // Audit log
+    await createAuditLog({ 
+      companyId: req.user!.companyId, 
+      userId: req.user!.id, 
+      action: 'approve', 
+      entityType: 'purchase_requisitions', 
+      entityId: pr.id, 
+      entityNumber: pr.pr_number 
+    });
+    
     res.json({ success: true, data: updated });
   } catch (e: any) { console.error("[ERP ERROR]", e.message, e.stack); res.status(500).json({ success: false, error: 'Failed to approve requisition' }); }
 });
@@ -601,6 +612,17 @@ router.post('/orders/:id/approve', async (req: Request, res: Response): Promise<
     const poApprover = await resolveApprover(req.user!.companyId, 'purchase_orders', req.user!.id);
     const [updated] = await db('purchase_orders').where({ id: po.id })
       .update({ status: 'pending_receipt', approved_by: poApprover, approved_at: new Date() }).returning('*');
+    
+    // Audit log
+    await createAuditLog({ 
+      companyId: req.user!.companyId, 
+      userId: req.user!.id, 
+      action: 'approve', 
+      entityType: 'purchase_orders', 
+      entityId: po.id, 
+      entityNumber: po.po_number 
+    });
+    
     res.json({ success: true, data: updated, message: 'Purchase order approved' });
   } catch (e: any) { console.error("[ERP ERROR]", e.message); res.status(500).json({ success: false, error: 'Failed to approve PO' }); }
 });
@@ -615,6 +637,17 @@ router.post('/orders/:id/reject', async (req: Request, res: Response): Promise<v
     const reason = req.body.reason || 'Rejected by approver';
     const [updated] = await db('purchase_orders').where({ id: po.id })
       .update({ status: 'cancelled', memo: `${po.memo || ''}\n[REJECTED] ${reason}`.trim() }).returning('*');
+    
+    // Audit log
+    await createAuditLog({ 
+      companyId: req.user!.companyId, 
+      userId: req.user!.id, 
+      action: 'reject', 
+      entityType: 'purchase_orders', 
+      entityId: po.id, 
+      entityNumber: po.po_number 
+    });
+    
     res.json({ success: true, data: updated, message: 'Purchase order rejected' });
   } catch (e: any) { console.error("[ERP ERROR]", e.message); res.status(500).json({ success: false, error: 'Failed to reject PO' }); }
 });
@@ -1068,6 +1101,17 @@ router.post('/bills/:id/approve', async (req: Request, res: Response): Promise<v
       });
     });
     const updated = await db('vendor_bills').where({ id: bill.id }).first();
+    
+    // Audit log
+    await createAuditLog({ 
+      companyId, 
+      userId: req.user!.id, 
+      action: 'approve', 
+      entityType: 'vendor_bills', 
+      entityId: bill.id, 
+      entityNumber: bill.bill_number 
+    });
+    
     res.json({ success: true, data: updated, message: 'Vendor bill approved' });
   } catch (e: any) { console.error("[ERP ERROR]", e.message, e.stack); res.status(500).json({ success: false, error: 'Failed to approve vendor bill' }); }
 });
@@ -1083,6 +1127,17 @@ router.post('/bills/:id/reject', async (req: Request, res: Response): Promise<vo
     const reason = req.body?.reason || 'Rejected by approver';
     const [updated] = await db('vendor_bills').where({ id: bill.id })
       .update({ approval_status: 'draft', memo: `${bill.memo || ''}\n[REJECTED] ${reason}`.trim() }).returning('*');
+    
+    // Audit log
+    await createAuditLog({ 
+      companyId: req.user!.companyId, 
+      userId: req.user!.id, 
+      action: 'reject', 
+      entityType: 'vendor_bills', 
+      entityId: bill.id, 
+      entityNumber: bill.bill_number 
+    });
+    
     res.json({ success: true, data: updated, message: 'Vendor bill rejected' });
   } catch (e: any) { console.error("[ERP ERROR]", e.message); res.status(500).json({ success: false, error: 'Failed to reject vendor bill' }); }
 });
@@ -2070,6 +2125,19 @@ function purchApproveReject(table: string, sourceType: string, route: string, rt
         await trx(table).where({ id: row.id }).update({ approval_status: 'approved', approved_by: approver, approved_at: new Date() });
       });
       const updated = await db(table).where({ id: row.id }).first();
+      
+      // Audit log
+      const entityType = table.replace(/_/g, '_');
+      const entityNumber = row.bill_number || row.prepayment_number || row.credit_number || row.po_number || row.pr_number || row.id;
+      await createAuditLog({ 
+        companyId: req.user.companyId, 
+        userId: req.user.id, 
+        action: 'approve', 
+        entityType, 
+        entityId: row.id, 
+        entityNumber 
+      });
+      
       res.json({ success: true, data: updated, message: 'Approved' });
     } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: `Failed to approve: ${e.message}` }); }
   });
@@ -2079,6 +2147,19 @@ function purchApproveReject(table: string, sourceType: string, route: string, rt
       if (!row || row.approval_status !== 'pending_approval') { res.status(400).json({ success: false, error: 'Not pending approval' }); return; }
       const [updated] = await db(table).where({ id: row.id })
         .update({ approval_status: 'draft', memo: `${row.memo || ''}\n[REJECTED] ${req.body?.reason || 'Rejected'}`.trim() }).returning('*');
+      
+      // Audit log
+      const entityType = table.replace(/_/g, '_');
+      const entityNumber = row.bill_number || row.prepayment_number || row.credit_number || row.po_number || row.pr_number || row.id;
+      await createAuditLog({ 
+        companyId: req.user.companyId, 
+        userId: req.user.id, 
+        action: 'reject', 
+        entityType, 
+        entityId: row.id, 
+        entityNumber 
+      });
+      
       res.json({ success: true, data: updated, message: 'Rejected' });
     } catch (e: any) { res.status(500).json({ success: false, error: `Failed to reject: ${e.message}` }); }
   });
@@ -2095,6 +2176,19 @@ function purchSubmit(table: string, route: string, rtr: typeof router) {
       if (!row) { res.status(404).json({ success: false, error: 'Record not found' }); return; }
       if (!['draft', 'rejected'].includes(row.approval_status || 'draft')) { res.status(400).json({ success: false, error: `Cannot submit — status is ${row.approval_status}` }); return; }
       const [updated] = await db(table).where({ id: row.id }).update({ approval_status: 'pending_approval' }).returning('*');
+      
+      // Audit log
+      const entityType = table.replace(/_/g, '_');
+      const entityNumber = row.bill_number || row.prepayment_number || row.credit_number || row.po_number || row.pr_number || row.id;
+      await createAuditLog({ 
+        companyId: req.user.companyId, 
+        userId: req.user.id, 
+        action: 'submit', 
+        entityType, 
+        entityId: row.id, 
+        entityNumber 
+      });
+      
       res.json({ success: true, data: updated, message: 'Submitted for approval' });
     } catch (e: any) { res.status(500).json({ success: false, error: `Failed: ${e.message}` }); }
   });

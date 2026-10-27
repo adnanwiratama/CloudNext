@@ -6,6 +6,7 @@ import { InventoryEngine } from '../../engines/inventory/inventoryEngine';
 import { AccountingEngine } from '../../engines/accounting/accountingEngine';
 import { resolveApprover, creationApprovalState } from '../../utils/approvals';
 import { getConfiguredApproverInfo } from '../../utils/approvals';
+import { createAuditLog } from '../../utils/audit';
 
 const router = Router();
 router.use(authenticate);
@@ -642,6 +643,17 @@ router.post('/adjustments/:id/approve', async (req: Request, res: Response): Pro
       });
     });
     const updated = await db('inventory_adjustments').where({ id: adj.id }).first();
+    
+    // Audit log
+    await createAuditLog({ 
+      companyId, 
+      userId: req.user!.id, 
+      action: 'approve', 
+      entityType: 'inventory_adjustments', 
+      entityId: adj.id, 
+      entityNumber: adj.adjustment_number 
+    });
+    
     res.json({ success: true, data: updated, message: 'Adjustment approved' });
   } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: 'Failed to approve adjustment' }); }
 });
@@ -652,6 +664,17 @@ router.post('/adjustments/:id/reject', async (req: Request, res: Response): Prom
     if (!adj || adj.approval_status !== 'pending_approval') { res.status(400).json({ success: false, error: 'Not pending approval' }); return; }
     const [updated] = await db('inventory_adjustments').where({ id: adj.id })
       .update({ approval_status: 'draft', memo: `${adj.memo || ''}\n[REJECTED] ${req.body?.reason || 'Rejected'}`.trim() }).returning('*');
+    
+    // Audit log
+    await createAuditLog({ 
+      companyId: req.user!.companyId, 
+      userId: req.user!.id, 
+      action: 'reject', 
+      entityType: 'inventory_adjustments', 
+      entityId: adj.id, 
+      entityNumber: adj.adjustment_number 
+    });
+    
     res.json({ success: true, data: updated, message: 'Adjustment rejected' });
   } catch (e: any) { res.status(500).json({ success: false, error: 'Failed to reject' }); }
 });
@@ -679,6 +702,17 @@ router.post('/transfers/:id/approve', async (req: Request, res: Response): Promi
       await trx('inventory_transfers').where({ id: tfr.id }).update({ status: 'posted', approval_status: 'approved', approved_by: approver, approved_at: new Date() });
     });
     const updated = await db('inventory_transfers').where({ id: tfr.id }).first();
+    
+    // Audit log
+    await createAuditLog({ 
+      companyId, 
+      userId: req.user!.id, 
+      action: 'approve', 
+      entityType: 'inventory_transfers', 
+      entityId: tfr.id, 
+      entityNumber: tfr.transfer_number 
+    });
+    
     res.json({ success: true, data: updated, message: 'Transfer approved' });
   } catch (e: any) { console.error('[ERP ERROR]', e.message); res.status(500).json({ success: false, error: 'Failed to approve transfer' }); }
 });
@@ -689,6 +723,17 @@ router.post('/transfers/:id/reject', async (req: Request, res: Response): Promis
     if (!tfr || tfr.approval_status !== 'pending_approval') { res.status(400).json({ success: false, error: 'Not pending approval' }); return; }
     const [updated] = await db('inventory_transfers').where({ id: tfr.id })
       .update({ approval_status: 'draft', memo: `${tfr.memo || ''}\n[REJECTED] ${req.body?.reason || 'Rejected'}`.trim() }).returning('*');
+    
+    // Audit log
+    await createAuditLog({ 
+      companyId: req.user!.companyId, 
+      userId: req.user!.id, 
+      action: 'reject', 
+      entityType: 'inventory_transfers', 
+      entityId: tfr.id, 
+      entityNumber: tfr.transfer_number 
+    });
+    
     res.json({ success: true, data: updated, message: 'Transfer rejected' });
   } catch (e: any) { res.status(500).json({ success: false, error: 'Failed to reject' }); }
 });
@@ -702,6 +747,19 @@ function invSubmit(table: string, route: string, rtr: typeof router) {
       if (!row) { res.status(404).json({ success: false, error: 'Record not found' }); return; }
       if (!['draft', 'rejected'].includes(row.approval_status || 'draft')) { res.status(400).json({ success: false, error: `Cannot submit — status is ${row.approval_status}` }); return; }
       const [updated] = await db(table).where({ id: row.id }).update({ approval_status: 'pending_approval' }).returning('*');
+      
+      // Audit log
+      const entityType = table.replace(/_/g, '_');
+      const entityNumber = row.adjustment_number || row.transfer_number || row.id;
+      await createAuditLog({ 
+        companyId: req.user.companyId, 
+        userId: req.user.id, 
+        action: 'submit', 
+        entityType, 
+        entityId: row.id, 
+        entityNumber 
+      });
+      
       res.json({ success: true, data: updated, message: 'Submitted for approval' });
     } catch (e: any) { res.status(500).json({ success: false, error: `Failed: ${e.message}` }); }
   });
