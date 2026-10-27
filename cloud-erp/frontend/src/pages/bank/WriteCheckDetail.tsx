@@ -512,23 +512,28 @@ export default function WriteCheckDetail() {
             {/* ── GL Impact ── */}
             {activeTab==='gl' && (
               <div>
-                {/* Posting badge based on approval_status */}
+                {/* Posting info: always show JE link if exists, badge shows posting status */}
                 <div className="mb-3 flex items-center gap-3 px-1">
                   <span className="text-sm font-medium text-slate-700">Posting:</span>
                   {data.journalEntry ? (
-                    <a href={`/accounting/journals/${data.journalEntry.id}`}
-                      onClick={e => { e.preventDefault(); navigate(`/accounting/journals/${data.journalEntry.id}`); }}
-                      className="font-mono text-blue-600 hover:text-blue-800 hover:underline text-sm font-medium">
-                      {data.journalEntry.journal_number}
-                    </a>
+                    <>
+                      <a href={`/accounting/journals/${data.journalEntry.id}`}
+                        onClick={e => { e.preventDefault(); navigate(`/accounting/journals/${data.journalEntry.id}`); }}
+                        className="font-mono text-blue-600 hover:text-blue-800 hover:underline text-sm font-medium">
+                        {data.journalEntry.journal_number}
+                      </a>
+                      {/* Badge based on approval_status, not JE status */}
+                      {data.approval_status === 'approved' ? (
+                        <span className="inline-flex px-2 py-0.5 text-xs rounded-full font-medium bg-green-100 text-green-700">Posted</span>
+                      ) : (
+                        <span className="inline-flex px-2 py-0.5 text-xs rounded-full font-medium bg-amber-100 text-amber-700">Non-Posting</span>
+                      )}
+                    </>
                   ) : (
-                    <span className="text-sm text-slate-400 italic">No journal entry</span>
-                  )}
-                  {/* Posting badge: non_posting when draft/pending/rejected, posted when approved */}
-                  {data.approval_status === 'approved' ? (
-                    <span className="inline-flex px-2 py-0.5 text-xs rounded-full font-medium bg-green-100 text-green-700">Posted</span>
-                  ) : (
-                    <span className="inline-flex px-2 py-0.5 text-xs rounded-full font-medium bg-amber-100 text-amber-700">Non-Posting</span>
+                    <>
+                      <span className="text-sm text-slate-400 italic">No journal entry</span>
+                      <span className="inline-flex px-2 py-0.5 text-xs rounded-full font-medium bg-amber-100 text-amber-700">Non-Posting</span>
+                    </>
                   )}
                 </div>
 
