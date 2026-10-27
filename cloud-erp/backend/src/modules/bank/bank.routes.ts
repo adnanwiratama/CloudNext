@@ -197,22 +197,24 @@ router.post('/write-checks', async (req: Request, res: Response): Promise<void> 
     }
 
     // Auto post GL: Dr. Expense/Item/PPN → Cr. Bank (balance with grossAmt)
-    try {
-      const jeNum = `JE-CHK-${docNumber}`;
-      const [je] = await db('journal_entries').insert({
-        company_id: companyId,
-        journal_number: jeNum,
-        entry_date: d.checkDate || new Date(),
-        memo: `Write Check - ${d.payTo} - ${docNumber}`,
-        source_type: 'bank_check',
-        source_id: check.id,
-        status: chkAppr.nonPosting ? 'non_posting' : 'posted',
-        created_by: req.user!.id,
-      }).returning('id');
-      const jeId = je?.id || je;
+    // Only create JE if no approval required (immediate posting)
+    if (!chkAppr.approvalRequired) {
+      try {
+        const jeNum = `JE-CHK-${docNumber}`;
+        const [je] = await db('journal_entries').insert({
+          company_id: companyId,
+          journal_number: jeNum,
+          entry_date: d.checkDate || new Date(),
+          memo: `Write Check - ${d.payTo} - ${docNumber}`,
+          source_type: 'bank_check',
+          source_id: check.id,
+          status: 'posted',
+          created_by: req.user!.id,
+        }).returning('id');
+        const jeId = je?.id || je;
 
-      let lineNum = 1;
-      let totalDebit = 0;
+        let lineNum = 1;
+        let totalDebit = 0;
 
       // Dr. each expense line (by amount, not grossAmt — PPN posted separately)
       for (const l of lines) {
@@ -295,7 +297,8 @@ router.post('/write-checks', async (req: Request, res: Response): Promise<void> 
       }
       // Record header totals so JE lists show the amount.
       await db('journal_entries').where({ id: jeId }).update({ total_debit: totalDebit, total_credit: totalDebit });
-    } catch (glErr: any) { console.error('[GL ERROR] Write Check GL:', glErr.message); }
+      } catch (glErr: any) { console.error('[GL ERROR] Write Check GL:', glErr.message); }
+    }
 
     // Log creation
     try {
@@ -799,6 +802,113 @@ export default router;
 
 // ─── Approve / Reject helpers for bank transactions (GL-only, no inventory) ──
 
+// Helper to create JE for bank check on approval
+async function createBankCheckJE(check: any, userId: string, trx: any) {
+  const jeNum = `JE-CHK-${check.document_number || check.check_number}`;
+  const [je] = await trx('journal_entries').insert({
+    company_id: check.company_id,
+    journal_number: jeNum,
+    entry_date: check.check_date || new Date(),
+    memo: `Write Check - ${check.pay_to} - ${check.document_number || check.check_number}`,
+    source_type: 'bank_check',
+    source_id: check.id,
+    status: 'posted',
+    created_by: userId,
+  }).returning('id');
+  const jeId = je?.id || je;
+
+  // Get expense lines and item lines
+  const lines = await trx('bank_check_lines').where({ check_id: check.id }).orderBy('line_number');
+  const itemLines = await trx('bank_check_item_lines').where({ check_id: check.id }).orderBy('line_number');
+
+  let lineNum = 1;
+  let totalDebit = 0;
+
+  // Dr. each expense line
+  for (const l of lines) {
+    if (l.account_id && Number(l.amount) > 0) {
+      await trx('journal_entry_lines').insert({
+        journal_id: jeId, line_number: lineNum++,
+        account_id: l.account_id,
+        debit: Number(l.amount), credit: 0,
+        debit_base: Number(l.amount), credit_base: 0,
+        memo: l.memo || `Expense - ${check.pay_to}`,
+      });
+      totalDebit += Number(l.amount);
+    }
+    // Dr. PPN per expense line if any tax
+    if (l.account_id && Number(l.tax_amt) > 0) {
+      const ppnAcct = await trx('accounts')
+        .where({ company_id: check.company_id })
+        .whereIn('code', ['2300', '2301'])
+        .first()
+        .catch(() => null);
+      if (ppnAcct) {
+        await trx('journal_entry_lines').insert({
+          journal_id: jeId, line_number: lineNum++,
+          account_id: ppnAcct.id,
+          debit: Number(l.tax_amt), credit: 0,
+          debit_base: Number(l.tax_amt), credit_base: 0,
+          memo: `PPN Input Tax`,
+        });
+        totalDebit += Number(l.tax_amt);
+      } else {
+        totalDebit += Number(l.tax_amt);
+      }
+    }
+  }
+
+  // Dr. each item line
+  for (const l of itemLines) {
+    if (l.item_id && Number(l.amount) > 0) {
+      const item = await trx('items').where({ id: l.item_id }).first().catch(() => null);
+      const acctId = item?.inventory_account_id || item?.expense_account_id || null;
+      if (acctId) {
+        await trx('journal_entry_lines').insert({
+          journal_id: jeId, line_number: lineNum++,
+          account_id: acctId,
+          debit: Number(l.amount), credit: 0,
+          debit_base: Number(l.amount), credit_base: 0,
+          memo: `${item?.name || ''} - ${check.pay_to}`.trim(),
+        });
+        totalDebit += Number(l.amount);
+      }
+      // Dr. PPN for item if any
+      if (Number(l.tax_amt) > 0) {
+        const ppnAcct = await trx('accounts').where({ company_id: check.company_id }).whereIn('code', ['2300', '2301']).first().catch(() => null);
+        if (ppnAcct) {
+          await trx('journal_entry_lines').insert({
+            journal_id: jeId, line_number: lineNum++,
+            account_id: ppnAcct.id,
+            debit: Number(l.tax_amt), credit: 0,
+            debit_base: Number(l.tax_amt), credit_base: 0,
+            memo: `PPN Input Tax (Items)`,
+          });
+          totalDebit += Number(l.tax_amt);
+        } else {
+          totalDebit += Number(l.tax_amt);
+        }
+      }
+    }
+  }
+
+  // Cr. Bank = total all debits
+  if (totalDebit > 0) {
+    await trx('journal_entry_lines').insert({
+      journal_id: jeId, line_number: lineNum,
+      account_id: check.bank_account_id,
+      debit: 0, credit: totalDebit,
+      debit_base: 0, credit_base: totalDebit,
+      memo: `Bank payment - ${check.document_number || check.check_number}`,
+    });
+  }
+
+  // Record header totals
+  await trx('journal_entries').where({ id: jeId }).update({ total_debit: totalDebit, total_credit: totalDebit });
+  
+  return jeId;
+}
+
 function bankApproveReject(table: string, sourceType: string, router: any) {
   router.post(`/${table === 'bank_checks' ? 'checks' : table === 'bank_deposits' ? 'deposits' : 'transfers'}/:id/approve`,
     async (req: any, res: any): Promise<void> => {
@@ -808,7 +918,14 @@ function bankApproveReject(table: string, sourceType: string, router: any) {
         if (row.approval_status !== 'pending_approval') { res.status(400).json({ success: false, error: `Not pending approval (status: ${row.approval_status || 'approved'})` }); return; }
         const approver = await resolveApprover(req.user.companyId, table, req.user.id);
         await db.transaction(async (trx: any) => {
-          await AccountingEngine.postDeferredJournal(sourceType, row.id, req.user.id, trx);
+          // Check if JE already exists (for old records), otherwise create new JE
+          const existingJE = await trx('journal_entries').where({ source_type: sourceType, source_id: row.id }).first();
+          if (existingJE) {
+            await AccountingEngine.postDeferredJournal(sourceType, row.id, req.user.id, trx);
+          } else if (table === 'bank_checks') {
+            // Create JE for bank check on approval
+            await createBankCheckJE(row, req.user.id, trx);
+          }
           await trx(table).where({ id: row.id }).update({ approval_status: 'approved', approved_by: approver, approved_at: new Date(), status: 'posted' });
         });
         const updated = await db(table).where({ id: row.id }).first();
