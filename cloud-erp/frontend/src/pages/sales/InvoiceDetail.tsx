@@ -1,8 +1,7 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { ChevronUp, ChevronDown, DollarSign, Printer, Loader2, CheckCircle2, FileText } from 'lucide-react';
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
+import { ChevronUp, ChevronDown, DollarSign, Printer, Loader2, CheckCircle2, FileText, Send, CheckCircle, XCircle } from 'lucide-react';
 import { useState, useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 import { formatCurrency, formatDate, formatNumber, formatStatus } from '../../utils/format';
 import TransactionLink from '../../components/common/TransactionLink';
@@ -11,7 +10,8 @@ import TransactionSysInfoTab from '../../components/transaction/TransactionSysIn
 import { usePrintDocument } from '../../hooks/usePrintDocument';
 import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
 import EditTransactionButton from '../../components/transaction/EditTransactionButton';
-import ApprovalBar from '../../components/transaction/ApprovalBar';
+import toast from 'react-hot-toast';
+import { useAuthStore } from '../../store/authStore';
 
 export default function InvoiceDetail() {
   const { id } = useParams<{ id: string }>();
@@ -31,6 +31,30 @@ export default function InvoiceDetail() {
     queryFn: () => api.get(`/api/sales/invoices/${id}`).then(r => r.data.data),
     enabled: !!id, staleTime: 0, refetchOnMount: true,
   });
+
+  const user = useAuthStore(s => s.user);
+
+  // ── Approval mutations ─────────────────────────────────────────────────────
+  const submitMutation = useMutation({
+    mutationFn: () => api.post(`/api/sales/invoices/${id}/submit`),
+    onSuccess: () => { toast.success('Submitted for approval'); qc.invalidateQueries({ queryKey: ['invoice', id] }); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to submit'),
+  });
+
+  const approveMutation = useMutation({
+    mutationFn: () => api.post(`/api/sales/invoices/${id}/approve`),
+    onSuccess: () => { toast.success('Invoice approved — GL posted'); qc.invalidateQueries({ queryKey: ['invoice', id] }); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to approve'),
+  });
+
+  const rejectMutation = useMutation({
+    mutationFn: () => api.post(`/api/sales/invoices/${id}/reject`, { reason: 'Rejected by approver' }),
+    onSuccess: () => { toast.success('Invoice rejected — returned to Draft'); qc.invalidateQueries({ queryKey: ['invoice', id] }); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to reject'),
+  });
+
+  // Who can approve/reject? Configured approver or admin
+  const canApproveReject = user?.isAdmin || (inv?.configured_approver_id && user?.id === inv.configured_approver_id);
 
   const { print } = usePrintDocument();
   const handlePrint = () => {
@@ -103,18 +127,29 @@ export default function InvoiceDetail() {
             </button>
           )}
           <DeleteTransactionButton type="invoice" id={id!} listPath="/sales/invoices" label={inv.invoice_number} />
-          <ApprovalBar
-            recordType="invoices"
-            approvalStatus={inv?.approval_status}
-            approvedByName={inv?.approved_by_name}
-            approvedAt={inv?.approved_at}
-            configuredApproverId={inv?.configured_approver_id}
-            configuredApproverName={inv?.configured_approver_name}
-            submitUrl={`/api/sales/invoices/${id}/submit`}
-            approveUrl={`/api/sales/invoices/${id}/approve`}
-            rejectUrl={`/api/sales/invoices/${id}/reject`}
-            queryKeys={['invoice', id]}
-          />
+          
+          {/* Approval buttons */}
+          {inv.approval_status === 'draft' && (
+            <button onClick={() => submitMutation.mutate()} disabled={submitMutation.isPending}
+              className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 disabled:opacity-60">
+              {submitMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+              Submit for Approval
+            </button>
+          )}
+          {inv.approval_status === 'pending_approval' && canApproveReject && (
+            <>
+              <button onClick={() => approveMutation.mutate()} disabled={approveMutation.isPending}
+                className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white text-sm font-medium rounded hover:bg-emerald-700 disabled:opacity-60">
+                {approveMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle size={13} />}
+                Approve
+              </button>
+              <button onClick={() => { if (confirm('Reject this invoice?')) rejectMutation.mutate(); }} disabled={rejectMutation.isPending}
+                className="flex items-center gap-1 px-3 py-1.5 bg-red-600 text-white text-sm font-medium rounded hover:bg-red-700 disabled:opacity-60">
+                {rejectMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <XCircle size={13} />}
+                Reject
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -149,8 +184,21 @@ export default function InvoiceDetail() {
                   <div><label className="block text-xs text-slate-500 mb-1">Currency</label><input readOnly value={inv.currency||''} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Memo</label><input readOnly value={inv.memo||''} className={dis}/></div>
                 </div>
-                {/* Column 3 — Summary */}
+                {/* Column 3 — Summary + Approval */}
                 <div className="space-y-3">
+                  <div><label className="block text-xs text-slate-500 mb-1">Approved By</label><input readOnly value={inv.approved_by_name||inv.configured_approver_name||'—'} className={dis}/></div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Approval Status</label>
+                    <div className={`w-full border border-slate-200 rounded text-sm px-2 py-1.5 bg-slate-50 font-medium ${
+                      inv.approval_status==='approved'?'text-emerald-600':
+                      inv.approval_status==='pending_approval'?'text-amber-600':
+                      inv.approval_status==='rejected'?'text-red-600':'text-slate-600'
+                    }`}>
+                      {inv.approval_status==='approved'?'Approved':
+                       inv.approval_status==='pending_approval'?'Pending Approval':
+                       inv.approval_status==='rejected'?'Rejected':'Draft'}
+                    </div>
+                  </div>
                   <div className="border border-slate-200 rounded overflow-hidden">
                     <div className="bg-slate-600 text-white text-xs font-semibold px-3 py-1.5">Summary</div>
                     <div className="text-sm">
@@ -269,9 +317,18 @@ export default function InvoiceDetail() {
             {activeTab==='files' && <TransactionFilesTab sourceType="invoice" sourceId={id!}/>}
             {activeTab==='gl' && (
               <div>
-                <div className="mb-3 text-xs bg-blue-50 border border-blue-100 rounded p-3 text-blue-700">
-                  <span className="font-medium text-blue-800">GL Impact: </span>
-                  <strong>Dr. Accounts Receivable (1200) → Cr. Revenue per line item + Cr. Tax Payable (PPN)</strong>
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="text-xs bg-blue-50 border border-blue-100 rounded p-3 text-blue-700 flex-1">
+                    <span className="font-medium text-blue-800">GL Impact: </span>
+                    <strong>Dr. Accounts Receivable (1200) → Cr. Revenue per line item + Cr. Tax Payable (PPN)</strong>
+                  </div>
+                  <div className="ml-3">
+                    <span className={`px-3 py-1.5 rounded text-xs font-semibold ${
+                      inv.approval_status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                    }`}>
+                      {inv.approval_status === 'approved' ? 'Posted' : 'Non-Posting'}
+                    </span>
+                  </div>
                 </div>
                 {(inv.journalEntries||[]).length > 0 ? (
                   <div className="border border-slate-200 rounded overflow-x-auto">
