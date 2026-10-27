@@ -818,8 +818,8 @@ async function createBankCheckJE(check: any, userId: string, trx: any) {
   const jeId = je?.id || je;
 
   // Get expense lines and item lines
-  const lines = await trx('bank_check_lines').where({ check_id: check.id }).orderBy('line_number');
-  const itemLines = await trx('bank_check_item_lines').where({ check_id: check.id }).orderBy('line_number');
+  const lines = await trx('bank_check_lines').where({ check_id: check.id });
+  const itemLines = await trx('bank_check_item_lines').where({ check_id: check.id });
 
   let lineNum = 1;
   let totalDebit = 0;
