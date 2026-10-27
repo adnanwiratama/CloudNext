@@ -8,6 +8,7 @@ import NumberInput from '../../components/common/NumberInput';
 import TransactionFileUploadRow, { FileRow, uploadFileRows } from '../../components/transaction/TransactionFileUploadRow';
 import CurrencyRateField from '../../components/CurrencyRateField';
 import AutoNumberField from '../../components/AutoNumberField';
+import ApprovalFields from '../../components/transaction/ApprovalFields';
 import { computeDueDate } from '../../utils/format';
 import toast from 'react-hot-toast';
 
@@ -388,6 +389,11 @@ export default function VendorBillForm() {
                     />
                     <div><label className="block text-xs text-slate-500 mb-1">Memo</label>
                       <textarea value={form.memo} onChange={e=>set('memo',e.target.value)} rows={3} className={`${dis} resize-none`}/></div>
+                    <ApprovalFields
+                      approvalStatus={existingBill?.approval_status}
+                      configuredApproverName={existingBill?.configured_approver_name}
+                      approvedByName={existingBill?.approved_by_name}
+                    />
                   </div>
                   <div className="space-y-3">
                     {/* Summary box (fixed top-right, always last in column) */}

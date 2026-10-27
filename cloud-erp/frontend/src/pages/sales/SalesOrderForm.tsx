@@ -8,6 +8,7 @@ import NumberInput from '../../components/common/NumberInput';
 import TransactionFileUploadRow, { FileRow, uploadFileRows } from '../../components/transaction/TransactionFileUploadRow';
 import CurrencyRateField from '../../components/CurrencyRateField';
 import AutoNumberField from '../../components/AutoNumberField';
+import ApprovalFields from '../../components/transaction/ApprovalFields';
 import { computeDueDate } from '../../utils/format';
 import toast from 'react-hot-toast';
 
@@ -443,6 +444,11 @@ export default function SalesOrderForm() {
                       <input type="text" value={form.memo} onChange={e => set('memo', e.target.value)}
                         className={dis} placeholder="Internal notes..."/>
                     </div>
+                    <ApprovalFields
+                      approvalStatus={existingSO?.approval_status}
+                      configuredApproverName={existingSO?.configured_approver_name}
+                      approvedByName={existingSO?.approved_by_name}
+                    />
                   </div>
                   {/* Column 3 — Summary */}
                   <div className="space-y-3">

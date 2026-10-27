@@ -8,6 +8,7 @@ import NumberInput from '../../components/common/NumberInput';
 import TransactionFileUploadRow, { FileRow, uploadFileRows } from '../../components/transaction/TransactionFileUploadRow';
 import CurrencyRateField from '../../components/CurrencyRateField';
 import AutoNumberField from '../../components/AutoNumberField';
+import ApprovalFields from '../../components/transaction/ApprovalFields';
 import { computeDueDate } from '../../utils/format';
 import toast from 'react-hot-toast';
 
@@ -351,6 +352,11 @@ export default function InvoiceForm() {
                       </select></div>
                     <div><label className="block text-xs text-slate-500 mb-1">Memo</label>
                       <textarea value={form.memo} onChange={e=>set('memo',e.target.value)} rows={3} className={`${dis} resize-none`}/></div>
+                    <ApprovalFields
+                      approvalStatus={existingInvoice?.approval_status}
+                      configuredApproverName={existingInvoice?.configured_approver_name}
+                      approvedByName={existingInvoice?.approved_by_name}
+                    />
                   </div>
                   {/* Column 3 — Summary (matches Vendor Bill) */}
                   <div className="space-y-3">
