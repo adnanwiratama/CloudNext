@@ -1,6 +1,6 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronUp, ChevronDown, CheckCircle, FileText, Truck, Loader2, CheckCircle2, ShoppingCart } from 'lucide-react';
+import { ChevronUp, ChevronDown, CheckCircle, FileText, Truck, Loader2, CheckCircle2, ShoppingCart, Send, XCircle } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { formatCurrency, formatDate, formatNumber, formatStatus } from '../../utils/format';
@@ -12,7 +12,7 @@ import { Printer } from 'lucide-react';
 import { usePrintDocument } from '../../hooks/usePrintDocument';
 import DeleteTransactionButton from '../../components/transaction/DeleteTransactionButton';
 import EditTransactionButton from '../../components/transaction/EditTransactionButton';
-import ApprovalBar from '../../components/transaction/ApprovalBar';
+import { useAuthStore } from '../../store/authStore';
 
 export default function SalesOrderDetail() {
   const { id } = useParams<{ id: string }>();
@@ -93,9 +93,17 @@ export default function SalesOrderDetail() {
   });
   const rejectMutation = useMutation({
     mutationFn: () => api.post(`/api/sales/orders/${id}/reject`, { reason: 'Rejected via UI' }),
-    onSuccess: () => { toast.success('Sales order rejected'); qc.invalidateQueries({ queryKey: ['sales-order', id] }); },
+    onSuccess: () => { toast.success('Sales order rejected — returned to Draft'); qc.invalidateQueries({ queryKey: ['sales-order', id] }); },
     onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to reject'),
   });
+
+  const user = useAuthStore(s => s.user);
+  const submitMutation = useMutation({
+    mutationFn: () => api.post(`/api/sales/orders/${id}/submit`),
+    onSuccess: () => { toast.success('Submitted for approval'); qc.invalidateQueries({ queryKey: ['sales-order', id] }); },
+    onError: (e: any) => toast.error(e.response?.data?.error || 'Failed to submit'),
+  });
+  const canApproveReject = user?.isAdmin || (so?.configured_approver_id && user?.id === so.configured_approver_id);
 
   if (isLoading) return <div className="flex items-center justify-center h-64"><Loader2 className="animate-spin text-blue-500" size={32}/></div>;
   if (!so) return <div className="p-6 text-red-600">Sales order not found.</div>;
@@ -130,18 +138,29 @@ export default function SalesOrderDetail() {
           {canFulfill && <button onClick={() => navigate(`/sales/fulfillments/new?soId=${id}`)} className="flex items-center gap-1 px-3 py-1.5 bg-blue-700 text-white text-sm rounded hover:bg-blue-800"><Truck size={13}/> Fulfillment</button>}
           {canInvoice && <button onClick={() => navigate(`/sales/invoices/new?soId=${id}`)} className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700"><FileText size={13}/> Create Invoice</button>}
           <DeleteTransactionButton type="sales_order" id={id!} listPath="/sales/orders" label={so.so_number} />
-          <ApprovalBar
-            recordType="sales_orders"
-            approvalStatus={so?.approval_status}
-            approvedByName={so?.approved_by_name}
-            approvedAt={so?.approved_at}
-            configuredApproverId={so?.configured_approver_id}
-            configuredApproverName={so?.configured_approver_name}
-            submitUrl={`/api/sales/orders/${id}/submit`}
-            approveUrl={`/api/sales/orders/${id}/approve`}
-            rejectUrl={`/api/sales/orders/${id}/reject`}
-            queryKeys={['sales-order', id]}
-          />
+          
+          {/* Approval buttons */}
+          {so.status === 'draft' && (
+            <button onClick={() => submitMutation.mutate()} disabled={submitMutation.isPending}
+              className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 disabled:opacity-60">
+              {submitMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+              Submit for Approval
+            </button>
+          )}
+          {so.status === 'pending_approval' && canApproveReject && (
+            <>
+              <button onClick={() => approveMutation.mutate()} disabled={approveMutation.isPending}
+                className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white text-sm font-medium rounded hover:bg-emerald-700 disabled:opacity-60">
+                {approveMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle size={13} />}
+                Approve
+              </button>
+              <button onClick={() => { if (confirm('Reject this SO?')) rejectMutation.mutate(); }} disabled={rejectMutation.isPending}
+                className="flex items-center gap-1 px-3 py-1.5 bg-red-600 text-white text-sm font-medium rounded hover:bg-red-700 disabled:opacity-60">
+                {rejectMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <XCircle size={13} />}
+                Reject
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -173,8 +192,21 @@ export default function SalesOrderDetail() {
                   <div><label className="block text-xs text-slate-500 mb-1">Payment Terms</label><input readOnly value={so.payment_terms||''} className={dis}/></div>
                   <div><label className="block text-xs text-slate-500 mb-1">Memo</label><input readOnly value={so.memo||''} className={dis}/></div>
                 </div>
-                {/* Column 3 — Summary */}
+                {/* Column 3 — Approval + Summary */}
                 <div className="space-y-3">
+                  <div><label className="block text-xs text-slate-500 mb-1">Approved By</label><input readOnly value={so.approved_by_name||so.configured_approver_name||'—'} className={dis}/></div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Approval Status</label>
+                    <div className={`w-full border border-slate-200 rounded text-sm px-2 py-1.5 bg-slate-50 font-medium ${
+                      so.status==='pending_fulfillment'||so.status==='fulfilled'||so.status==='partially_fulfilled'?'text-emerald-600':
+                      so.status==='pending_approval'?'text-amber-600':
+                      so.status==='cancelled'?'text-red-600':'text-slate-600'
+                    }`}>
+                      {so.status==='pending_fulfillment'||so.status==='fulfilled'||so.status==='partially_fulfilled'?'Approved':
+                       so.status==='pending_approval'?'Pending Approval':
+                       so.status==='cancelled'?'Cancelled':'Draft'}
+                    </div>
+                  </div>
                   <div className="border border-slate-200 rounded overflow-hidden">
                     <div className="bg-slate-600 text-white text-xs font-semibold px-3 py-1.5">Summary</div>
                     <div className="text-sm">
